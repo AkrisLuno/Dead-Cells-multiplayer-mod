@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Reflection;
 using dc.pr;
@@ -9,6 +8,7 @@ using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using DeadCellsMultiplayerMod.PortableCore;
 using DeadCellsMultiplayerMod.Tools;
+using DeadCellsMultiplayerMod.UI;
 using ModCore.Modules;
 
 
@@ -594,17 +594,9 @@ namespace DeadCellsMultiplayerMod
                 screen.clearMenu();
                 UiBegin();
                 UiInfo(Localize("Co-op multiplayer"), 0xF7FC65);
-                UiInfo(Localize("2-Player co-op mode via LAN / Virtual Network"), 0x9098A8);
                 UiButton(
                     GetText.Instance.GetString("Host game"),
-                    () =>
-                    {
-                        _menuSelection = NetRole.Host;
-                        _menuTransport = ConnectionTransport.Lan;
-                        StartHostServerOnly(bindAnyAddress: true);
-                        ShowHostStatusMenu(screen);
-                        screen.ShouldAutoHideConnectionUI(true);
-                    },
+                    () => StartLanHost(screen, () => ShowMultiplayerMenu(screen)),
                     Localize("Host LAN/Direct game (shows Room Code & IP)"),
                     textColor: 0x59D5FF);
                 UiButton(
@@ -616,6 +608,10 @@ namespace DeadCellsMultiplayerMod
                     Localize("Steam & Advanced Options"),
                     () => ShowHostTransportMenu(screen),
                     Localize("Open advanced settings or Steam lobby"));
+                UiButton(
+                    GetText.Instance.GetString("Steam join"),
+                    () => ShowJoinTransportMenu(screen),
+                    Localize("Join a Steam lobby via friends or lobby code"));
                 UiButton(
                     GetText.Instance.GetString("Back"),
                     () => ReturnFromMultiplayerHubToTitle(screen),
@@ -654,87 +650,29 @@ namespace DeadCellsMultiplayerMod
                 UiInfo(Localize("Join Multiplayer Game"), 0xF7FC65);
                 UiInfo(Localize("Enter Room Code (e.g. RVQ3O0) or Host IP (Tailscale: 100.x.x.x)"), 0x9098A8);
 
-                var displayTarget = string.IsNullOrWhiteSpace(_mpRoomCodeOrIp) 
-                    ? (_mpIp == "127.0.0.1" ? "100.124.96.16" : _mpIp) 
-                    : _mpRoomCodeOrIp;
+                var displayTarget = _mpRoomCodeOrIp;
+                if (string.IsNullOrEmpty(displayTarget) && _mpIp != "127.0.0.1")
+                    displayTarget = $"{_mpIp}:{_mpPort}";
 
                 UiButton(
                     $"Room Code / IP: {displayTarget}",
-                    () =>
+                    () => OpenTextInput(screen, "Enter Room Code or Host IP", displayTarget, value =>
                     {
-                        OpenTextInput(screen, "Enter Room Code or Host IP", displayTarget, value =>
-                        {
-                            if (!string.IsNullOrWhiteSpace(value))
-                            {
-                                _mpRoomCodeOrIp = value.Trim();
-                                if (TryParseRoomCodeOrIp(_mpRoomCodeOrIp, out var parsedIp, out var parsedPort))
-                                {
-                                    _mpIp = parsedIp;
-                                    _mpPort = parsedPort;
-                                }
-                                else
-                                {
-                                    _mpIp = _mpRoomCodeOrIp;
-                                }
-                                SaveConfig();
-                            }
-                            ShowSimplifiedJoinMenu(screen);
-                        }, noSpaces: true);
-                    },
+                        _mpRoomCodeOrIp = value.Trim();
+                        ShowSimplifiedJoinMenu(screen);
+                    }, noSpaces: true),
                     "Click to enter Room Code or Host IP",
                     fieldStyle: true);
 
                 UiButton(
                     "Connect",
-                    () =>
-                    {
-                        var target = string.IsNullOrWhiteSpace(_mpRoomCodeOrIp) ? displayTarget : _mpRoomCodeOrIp;
-                        if (TryParseRoomCodeOrIp(target, out var parsedIp, out var parsedPort))
-                        {
-                            _mpIp = parsedIp;
-                            _mpPort = parsedPort;
-                        }
-                        else
-                        {
-                            _mpIp = target;
-                        }
-                        SaveConfig();
-                        StartNetwork(NetRole.Client, screen);
-                        ShowClientWaitingMenu(screen);
-                        screen.ShouldAutoHideConnectionUI(true);
-                    },
+                    () => ConnectLan(screen, displayTarget, () => ShowSimplifiedJoinMenu(screen)),
                     "Connect to Host lobby",
                     textColor: 0x59D5FF);
 
                 UiButton(
                     "Paste from Clipboard & Connect",
-                    () =>
-                    {
-                        var clip = DeadCellsMultiplayerMod.UI.ClipboardHelper.TryGetClipboardText();
-                        if (!string.IsNullOrWhiteSpace(clip))
-                        {
-                            var target = clip.Trim();
-                            _mpRoomCodeOrIp = target;
-                            if (TryParseRoomCodeOrIp(target, out var parsedIp, out var parsedPort))
-                            {
-                                _mpIp = parsedIp;
-                                _mpPort = parsedPort;
-                            }
-                            else
-                            {
-                                _mpIp = target;
-                            }
-                            SaveConfig();
-                            MultiplayerUI.PushSystemMessage($"Pasted: {_mpRoomCodeOrIp}");
-                            StartNetwork(NetRole.Client, screen);
-                            ShowClientWaitingMenu(screen);
-                            screen.ShouldAutoHideConnectionUI(true);
-                        }
-                        else
-                        {
-                            MultiplayerUI.PushSystemMessage("Clipboard is empty!");
-                        }
-                    },
+                    () => ConnectLan(screen, ClipboardHelper.TryGetClipboardText() ?? string.Empty, () => ShowSimplifiedJoinMenu(screen)),
                     "Automatically paste Room Code or IP from Clipboard and connect immediately");
 
                 UiButton(
@@ -760,6 +698,44 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, prevIsMain);
                 _suppressAutoButton = prevSuppress;
             }
+        }
+
+        private static void ConnectLan(TitleScreen screen, string target, Action onError)
+        {
+            if (!LanRoomCode.TryParse(target, out var endpoint))
+            {
+                ShowConnectionErrorPopup(
+                    screen,
+                    Localize("Invalid Room Code or IP"),
+                    Localize("Enter a LAN room code or an IPv4 address. Include the port if the host changed it."),
+                    onError);
+                return;
+            }
+
+            _mpIp = endpoint.Address.ToString();
+            _mpPort = endpoint.Port;
+            _mpRoomCodeOrIp = target.Trim();
+            SaveConfig();
+            StartClientNetwork(screen);
+        }
+
+        private static void StartLanHost(TitleScreen screen, Action onError)
+        {
+            _menuSelection = NetRole.Host;
+            _menuTransport = ConnectionTransport.Lan;
+            StartHostServerOnly();
+            if (NetRef?.ListenerEndpoint == null)
+            {
+                ShowConnectionErrorPopup(
+                    screen,
+                    Localize("Could not host LAN game"),
+                    Localize("Check whether the port is already in use, then try again."),
+                    onError);
+                return;
+            }
+
+            ShowHostStatusMenu(screen);
+            screen.ShouldAutoHideConnectionUI(true);
         }
 
         internal static void ShowHostTransportMenu(TitleScreen screen)
@@ -1068,22 +1044,25 @@ namespace DeadCellsMultiplayerMod
                     GetText.Instance.GetString("Edit display name"),
                     fieldStyle: true);
 
-                UiButton($"{GetText.Instance.GetString("IP: ")}{_mpIp}", () =>
+                if (role == NetRole.Client)
                 {
-                    OpenTextInput(screen, GetText.Instance.GetString("IP address"), _mpIp, value =>
+                    UiButton($"{GetText.Instance.GetString("IP: ")}{_mpIp}", () =>
                     {
-                        _mpIp = string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value;
-                        SaveConfig();
-                        ShowConnectionMenu(screen, role);
-                    }, noSpaces: true);
-                }, GetText.Instance.GetString("Edit IP"), fieldStyle: true);
+                        OpenTextInput(screen, GetText.Instance.GetString("IP address"), _mpIp, value =>
+                        {
+                            _mpIp = string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value;
+                            SaveConfig();
+                            ShowConnectionMenu(screen, role);
+                        }, noSpaces: true);
+                    }, GetText.Instance.GetString("Edit IP"), fieldStyle: true);
+                }
 
                 UiButton($"{GetText.Instance.GetString("Port: ")}{_mpPort}", () =>
                 {
                     OpenTextInput(screen, GetText.Instance.GetString("Port"), _mpPort.ToString(), value =>
                     {
                         if (!int.TryParse(value, out var parsed) || parsed <= 0 || parsed > 65535)
-                            parsed = 1234;
+                            parsed = LanRoomCode.DefaultPort;
                         _mpPort = parsed;
                         SaveConfig();
                         ShowConnectionMenu(screen, role);
@@ -1095,21 +1074,15 @@ namespace DeadCellsMultiplayerMod
                     : GetText.Instance.GetString("Join");
                 if (role == NetRole.Host)
                 {
-                    UiButton(actionLabel, () =>
-                    {
-                        StartHostServerOnly();
-                        ShowHostStatusMenu(screen);
-                        screen.ShouldAutoHideConnectionUI(true);
-                    }, GetText.Instance.GetString("Start hosting"), textColor: 0x59D5FF);
+                    UiButton(actionLabel,
+                        () => StartLanHost(screen, () => ShowConnectionMenu(screen, role)),
+                        GetText.Instance.GetString("Start hosting"), textColor: 0x59D5FF);
                 }
                 else
                 {
-                    UiButton(actionLabel, () =>
-                    {
-                        StartNetwork(role, screen);
-                        ShowClientWaitingMenu(screen);
-                        screen.ShouldAutoHideConnectionUI(true);
-                    }, GetText.Instance.GetString("Connect to host"), textColor: 0x59D5FF);
+                    UiButton(actionLabel,
+                        () => ConnectLan(screen, $"{_mpIp}:{_mpPort}", () => ShowConnectionMenu(screen, role)),
+                        GetText.Instance.GetString("Connect to host"), textColor: 0x59D5FF);
                 }
 
                 UiButton(
@@ -1161,7 +1134,7 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
-            StartHostServerOnly(bindAnyAddress: true);
+            StartHostServerOnly();
             if (NetRef == null || !NetRef.IsAlive || !NetRef.IsHost)
             {
                 _log?.Warning("[NetMod][Steam] Host start failed: host server was not created");
@@ -1360,9 +1333,7 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI.NotifyConnectionsChanged();
             _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
 
-            StartNetwork(NetRole.Client, screen);
-            ShowClientWaitingMenu(screen);
-            screen.ShouldAutoHideConnectionUI(true);
+            StartClientNetwork(screen);
         }
 
         internal static void ShowConnectionErrorPopup(TitleScreen screen, string title, string details, Action onOk)
@@ -1401,7 +1372,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        internal static void StartNetwork(NetRole role, TitleScreen screen)
+        private static void StartClientNetwork(TitleScreen screen)
         {
             try
             {
@@ -1411,46 +1382,25 @@ namespace DeadCellsMultiplayerMod
                     return;
                 }
 
-                if (role == NetRole.Host)
+                if (_menuTransport == ConnectionTransport.Steam && _steamHostSteamId == 0UL)
                 {
-                    PrepareLobbyForNewNetworkSession(clearRemoteCoopState: true);
-                    var streamEnabled = TryGetStreamEnabled(screen);
-                    if (_menuTransport == ConnectionTransport.Steam)
-                        ModEntry.Instance.StartSteamHostFromMenu(_mpPort, _steamLobbyVisibility);
-                    else
-                        ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
-
-                    // Prime host-save mobility/rune progression while still on the main thread.
-                    // NetNode caches it even with no completed peer, so a different/clean client
-                    // save receives this before its launch and first LevelGen.
-                    DeadCellsMultiplayerMod.AdvancedCoop.CoopAdvancedHardening.PrimeHostProgressSnapshot(NetRef);
-
-                    SetAuthoritativePendingNewGameLaunch(custom: false, streamEnabled);
-                    RememberPendingLaunch(PendingLaunchAction.NewGame, custom: false, streamEnabled, sendToRemote: true);
-                    TryLaunchNewGame(screen, custom: false, streamEnabled);
+                    _log?.Warning("[NetMod][Steam] Client start aborted: host Steam id is missing");
+                    ShowConnectionErrorPopup(
+                        screen,
+                        GetText.Instance.GetString("Steam join failed"),
+                        GetText.Instance.GetString("Steam host id is missing. Check console logs."),
+                        () => ShowJoinTransportMenu(screen));
+                    return;
                 }
-                else if (role == NetRole.Client)
-                {
-                    PrepareLobbyForNewNetworkSession(clearRemoteCoopState: true);
-                    if (_menuTransport == ConnectionTransport.Steam)
-                    {
-                        if (_steamHostSteamId == 0UL)
-                        {
-                            _log?.Warning("[NetMod][Steam] Client start aborted: host Steam id is missing");
-                            ShowConnectionErrorPopup(
-                                screen,
-                                GetText.Instance.GetString("Steam join failed"),
-                                GetText.Instance.GetString("Steam host id is missing. Check console logs."),
-                                () => ShowJoinTransportMenu(screen));
-                            return;
-                        }
-                    }
 
-                    if (_menuTransport == ConnectionTransport.Steam)
-                        ModEntry.Instance.StartSteamClientFromMenu(_steamHostSteamId);
-                    else
-                        ModEntry.Instance.StartClientFromMenu(_mpIp, _mpPort);
-                }
+                PrepareLobbyForNewNetworkSession(clearRemoteCoopState: true);
+                if (_menuTransport == ConnectionTransport.Steam)
+                    ModEntry.Instance.StartSteamClientFromMenu(_steamHostSteamId);
+                else
+                    ModEntry.Instance.StartClientFromMenu(_mpIp, _mpPort);
+
+                ShowClientWaitingMenu(screen);
+                screen.ShouldAutoHideConnectionUI(true);
             }
             catch (Exception ex)
             {
@@ -1458,7 +1408,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        internal static void StartHostServerOnly(bool bindAnyAddress = false)
+        internal static void StartHostServerOnly()
         {
             try
             {
@@ -1480,10 +1430,7 @@ namespace DeadCellsMultiplayerMod
                     ModEntry.Instance.StartSteamHostFromMenu(_mpPort, _steamLobbyVisibility);
                 }
                 else
-                {
-                    var hostIp = bindAnyAddress ? "0.0.0.0" : _mpIp;
-                    ModEntry.Instance.StartHostFromMenu(hostIp, _mpPort);
-                }
+                    ModEntry.Instance.StartHostFromMenu(_mpPort);
 
                 DeadCellsMultiplayerMod.AdvancedCoop.CoopAdvancedHardening.PrimeHostProgressSnapshot(NetRef);
 
@@ -1493,20 +1440,6 @@ namespace DeadCellsMultiplayerMod
                 _log?.Warning("[NetMod] Host start failed: {Message}", ex.Message);
             }
         }
-
-        // internal static void GameDisposeHook(Hook_Game.orig_onDispose orig, Game self)
-        // {
-        //     try
-        //     {
-        //         HandleWorldExit(isDisposeHook: true);
-        //     }
-        //     catch (Exception ex)
-        //     {
-        //         _log?.Warning("[NetMod] onDispose hook error: {Message}", ex.Message);
-        //     }
-
-        //     orig(self);
-        // }
 
         internal static void HandleWorldExit(bool isDisposeHook = false)
         {

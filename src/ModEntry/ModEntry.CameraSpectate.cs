@@ -100,10 +100,7 @@ namespace DeadCellsMultiplayerMod
 
         private static bool IsCameraCycleTextInputBlocked()
         {
-            if (DeadCellsMultiplayerMod.MultiplayerModUI.Connection.ConnectionUI.IsTextPromptOpen())
-                return true;
-            var activeTextInput = TextInputHandler.GetActiveTextInput();
-            return activeTextInput != null && TextInputHandler.IsTextInputActive(activeTextInput);
+            return DeadCellsMultiplayerMod.MultiplayerModUI.Connection.ConnectionUI.IsTextPromptOpen();
         }
 
         private bool ConsumeCameraCyclePress(int primaryKeyCode, int fallbackKeyCode, ref bool textPressed)

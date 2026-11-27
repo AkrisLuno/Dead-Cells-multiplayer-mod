@@ -22,11 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)..\release\coremod\core\host\*.dll" Condition="Exists('$(MSBuildThisFileDirectory)..\release\coremod\core\host')">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Visible>false</Visible>
-    </None>
-    <None Include="$(MSBuildThisFileDirectory)..\release\coremod\core\mdk\tools\Serilog.dll" Condition="Exists('$(MSBuildThisFileDirectory)..\release\coremod\core\mdk\tools\Serilog.dll')">
+    <None Include="$(DCCM_MDK_ROOT)/../host/*.dll" Condition="'$(DCCM_MDK_ROOT)' != ''">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Visible>false</Visible>
     </None>

@@ -494,7 +494,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
             if (hubLayout)
             {
-                // Row 1: Host | Join (with tips). Row 2: Back. Top-center of big panel.
+                // Keep Host and Join side by side above the secondary actions.
                 for (int i = 0; i < actions.Count; i += 2)
                 {
                     bool pair = i + 1 < actions.Count;

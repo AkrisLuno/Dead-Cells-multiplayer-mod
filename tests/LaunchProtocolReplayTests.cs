@@ -1,6 +1,9 @@
+using System.Net;
+using System.Net.Sockets;
 using DeadCellsMultiplayerMod.PortableCore;
 using DeadCellsMultiplayerMod.Network;
 using DeadCellsMultiplayerMod.Tools;
+using Serilog;
 using Xunit;
 
 namespace DeadCellsMultiplayerMod.ProtocolReplay.Tests;
@@ -106,48 +109,69 @@ public sealed class LaunchProtocolReplayTests
     }
 
     [Theory]
-    [InlineData("100.124.96.16")]
-    [InlineData("100.125.93.13")]
+    [InlineData("100.64.0.20")]
+    [InlineData("255.255.255.255")]
     [InlineData("192.168.1.2")]
     [InlineData("127.0.0.1")]
     [InlineData("10.0.0.5")]
     public void RoomCode_RoundTrips_IPv4Addresses(string ip)
     {
-        var code = DeadCellsMultiplayerMod.LobbySession.IpToRoomCode(ip);
-        Assert.False(string.IsNullOrWhiteSpace(code));
+        var address = IPAddress.Parse(ip);
+        var code = LanRoomCode.Format(address, LanRoomCode.DefaultPort);
         Assert.Matches("^[0-9A-Z]+$", code);
 
-        var ok = DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp(code, out var resolvedIp, out var resolvedPort);
-        Assert.True(ok);
-        Assert.Equal(ip, resolvedIp);
-        Assert.Equal(1234, resolvedPort);
+        Assert.True(LanRoomCode.TryParse(code, out var endpoint));
+        Assert.Equal(new IPEndPoint(address, 1234), endpoint);
     }
 
     [Fact]
     public void RoomCode_HandlesPrefixAndCaseAndWhitespace()
     {
-        var code = DeadCellsMultiplayerMod.LobbySession.IpToRoomCode("100.124.96.16");
-        Assert.True(DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp($"  DC-{code.ToLowerInvariant()}  ", out var ip1, out _));
-        Assert.Equal("100.124.96.16", ip1);
-
-        Assert.True(DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp($"dc-{code}", out var ip2, out _));
-        Assert.Equal("100.124.96.16", ip2);
+        var address = IPAddress.Parse("100.64.0.20");
+        var code = LanRoomCode.Format(address, 4321);
+        Assert.True(LanRoomCode.TryParse($"  DC-{code.ToLowerInvariant()}  ", out var endpoint));
+        Assert.Equal(new IPEndPoint(address, 4321), endpoint);
     }
 
     [Fact]
     public void RoomCode_DirectIpAndPortParsing()
     {
-        Assert.True(DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp("100.124.96.16:4321", out var ip, out var port));
-        Assert.Equal("100.124.96.16", ip);
-        Assert.Equal(4321, port);
+        Assert.True(LanRoomCode.TryParse("100.64.0.20:4321", out var endpoint));
+        Assert.Equal(IPEndPoint.Parse("100.64.0.20:4321"), endpoint);
 
-        Assert.True(DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp("  192.168.1.50  ", out var ip2, out var port2));
-        Assert.Equal("192.168.1.50", ip2);
-        Assert.Equal(1234, port2);
+        Assert.True(LanRoomCode.TryParse("  192.168.1.50  ", out endpoint));
+        Assert.Equal(IPEndPoint.Parse("192.168.1.50:1234"), endpoint);
+    }
 
-        Assert.False(DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp(null, out _, out _));
-        Assert.False(DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp("   ", out _, out _));
-        Assert.False(DeadCellsMultiplayerMod.LobbySession.TryParseRoomCodeOrIp("invalid?!code", out _, out _));
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("DC-")]
+    [InlineData("invalid?!code")]
+    [InlineData("ZZZZZZZ")]
+    [InlineData("127.0.0.1:0")]
+    [InlineData("127.0.0.1:65536")]
+    [InlineData("127.0.0.1:1234:5678")]
+    [InlineData("::1")]
+    public void RoomCode_RejectsInvalidAddressesAndPorts(string? input)
+    {
+        Assert.False(LanRoomCode.TryParse(input, out _));
+    }
+
+    [Fact]
+    public async Task RoomCode_ConnectsToHostOnItsActualTcpPort()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var logger = new LoggerConfiguration().CreateLogger();
+        using var host = NetNode.CreateHost(logger, new IPEndPoint(IPAddress.Loopback, 0));
+        using var client = new TcpClient(AddressFamily.InterNetwork);
+        var code = LanRoomCode.Format(IPAddress.Loopback, host.ListenerEndpoint!.Port);
+        Assert.True(LanRoomCode.TryParse(code, out var endpoint));
+
+        await client.ConnectAsync(endpoint, timeout.Token);
+        using var reader = new StreamReader(client.GetStream());
+        Assert.Equal($"WELCOME|{BuildInfo.NetworkProtocolVersion}|{BuildInfo.Version}", await reader.ReadLineAsync(timeout.Token));
+        Assert.Equal("ID|2", await reader.ReadLineAsync(timeout.Token));
     }
 
     private static RunLaunchDescriptor CreateDescriptor()

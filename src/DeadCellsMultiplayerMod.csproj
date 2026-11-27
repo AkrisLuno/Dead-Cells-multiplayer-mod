@@ -7,11 +7,7 @@
     <SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
     <SupportedOSPlatform>Windows</SupportedOSPlatform>
     <NoWarn>$(NoWarn);CA1416;CS0414;CS9107</NoWarn>
-    <!-- Release version -->
-    <Version>0.5.1</Version>
-    <AssemblyVersion>0.5.1</AssemblyVersion>
-    <FileVersion>0.5.1</FileVersion>
-    <InformationalVersion>0.5.1-vanilla-host-authoritative-mobsync</InformationalVersion>
+    <Version>0.8.91</Version>
     <ModType>mod</ModType>
     <ModMain>DeadCellsMultiplayerMod.ModEntry</ModMain>
     
@@ -20,8 +16,6 @@
     <Prefer32Bit>false</Prefer32Bit>
     <AssemblyName>DeadCellsMultiplayerMod</AssemblyName>
     <AutoInstallMod Condition="'$(AutoInstallMod)' == ''">false</AutoInstallMod>
-    <DCCM_MDK_ROOT Condition="'$(DCCM_MDK_ROOT)' == '' and Exists('$(MSBuildThisFileDirectory)..\release\coremod\core\mdk')">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\release\coremod\core\mdk'))</DCCM_MDK_ROOT>
-
     <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\tools\Steamworks.NET.dll</SteamworksNetHintPath>
 
     <SteamApi64HintPath Condition="'$(SteamApi64HintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\..\native\win-x64\steam_api64.dll</SteamApi64HintPath>
@@ -52,8 +46,6 @@
     <Optimize>true</Optimize>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Remove="ProtocolReplay.Tests\**" />
-    <Compile Remove="Installer\**" />
     <Compile Remove="API\**" />
     <None Remove="API\**" />
     <PackAssets Include="Resourcefile\**\*" RootInPak="DeadCellsMultiplayerModLang" />

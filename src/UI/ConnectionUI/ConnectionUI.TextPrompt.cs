@@ -1,6 +1,5 @@
 using System;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using dc;
 using dc.h2d;
 using dc.hxd;
@@ -10,6 +9,7 @@ using ModCore.Modules;
 using ModCore.Utilities;
 using Serilog;
 using DeadCellsMultiplayerMod.Tools;
+using DeadCellsMultiplayerMod.UI;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
@@ -41,9 +41,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private const int KeyC = 67;
         private const int KeyV = 86;
         private const int KeyX = 88;
-        private const int CfUnicodeText = 13;
-        private const uint GmemMoveable = 0x0002;
-
         private static readonly int PromptPlaceholderColor = 0x6E778A;
         private static readonly int PromptValueColor = 0xE8EEF7;
         private static readonly int PromptCaretColor = 0x59D5FF;
@@ -560,12 +557,12 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 else if (ctrl && Key.Class.isPressed(KeyC))
                 {
                     var selected = PromptHasSelection ? GetPromptSelectedText() : this._promptBuffer;
-                    TrySetClipboardText(selected ?? string.Empty);
+                    ClipboardHelper.TrySetClipboardText(selected ?? string.Empty);
                 }
                 else if (ctrl && Key.Class.isPressed(KeyX))
                 {
                     var selected = PromptHasSelection ? GetPromptSelectedText() : this._promptBuffer;
-                    TrySetClipboardText(selected ?? string.Empty);
+                    ClipboardHelper.TrySetClipboardText(selected ?? string.Empty);
                     if (PromptHasSelection)
                     {
                         DeletePromptSelection();
@@ -581,7 +578,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 }
                 else if (ctrl && Key.Class.isPressed(KeyV))
                 {
-                    var clip = TryGetClipboardText();
+                    var clip = ClipboardHelper.TryGetClipboardText();
                     if (!string.IsNullOrEmpty(clip))
                         InsertPromptText(clip);
                 }
@@ -1020,103 +1017,5 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 this._promptCaretGfx.endFill();
             }
         }
-
-        private static string? TryGetClipboardText()
-        {
-            try
-            {
-                if (!IsClipboardFormatAvailable(CfUnicodeText))
-                    return null;
-                if (!OpenClipboard(IntPtr.Zero))
-                    return null;
-                try
-                {
-                    var handle = GetClipboardData(CfUnicodeText);
-                    if (handle == IntPtr.Zero)
-                        return null;
-                    var ptr = GlobalLock(handle);
-                    if (ptr == IntPtr.Zero)
-                        return null;
-                    try { return Marshal.PtrToStringUni(ptr); }
-                    finally { GlobalUnlock(handle); }
-                }
-                finally { CloseClipboard(); }
-            }
-            catch { return null; }
-        }
-
-        private static bool TrySetClipboardText(string text)
-        {
-            try
-            {
-                if (!OpenClipboard(IntPtr.Zero))
-                    return false;
-                try
-                {
-                    if (!EmptyClipboard())
-                        return false;
-                    var bytes = (text.Length + 1) * 2;
-                    var hGlobal = GlobalAlloc(GmemMoveable, (UIntPtr)bytes);
-                    if (hGlobal == IntPtr.Zero)
-                        return false;
-                    var target = GlobalLock(hGlobal);
-                    if (target == IntPtr.Zero)
-                    {
-                        GlobalFree(hGlobal);
-                        return false;
-                    }
-                    try
-                    {
-                        Marshal.Copy(text.ToCharArray(), 0, target, text.Length);
-                        Marshal.WriteInt16(target, text.Length * 2, 0);
-                    }
-                    finally { GlobalUnlock(hGlobal); }
-
-                    if (SetClipboardData(CfUnicodeText, hGlobal) == IntPtr.Zero)
-                    {
-                        GlobalFree(hGlobal);
-                        return false;
-                    }
-                    return true;
-                }
-                finally { CloseClipboard(); }
-            }
-            catch { return false; }
-        }
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool OpenClipboard(IntPtr hWndNewOwner);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool CloseClipboard();
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool EmptyClipboard();
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool IsClipboardFormatAvailable(uint format);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr GetClipboardData(uint uFormat);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalLock(IntPtr hMem);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool GlobalUnlock(IntPtr hMem);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalFree(IntPtr hMem);
     }
 }
