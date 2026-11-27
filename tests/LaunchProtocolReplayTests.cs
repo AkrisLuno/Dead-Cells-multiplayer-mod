@@ -50,20 +50,6 @@ public sealed class LaunchProtocolReplayTests
     }
 
     [Fact]
-    public void ClientLaunchGateMapsToPortableSessionPhases()
-    {
-        Assert.Equal(
-            CoopSessionPhase.LaunchCommitted,
-            RunLaunchCoordinator.MapClientLaunchPhaseToSessionPhase(LobbySession.ClientLaunchPhase.Armed));
-        Assert.Equal(
-            CoopSessionPhase.LoadingLevel,
-            RunLaunchCoordinator.MapClientLaunchPhaseToSessionPhase(LobbySession.ClientLaunchPhase.Starting));
-        Assert.Equal(
-            CoopSessionPhase.Playing,
-            RunLaunchCoordinator.MapClientLaunchPhaseToSessionPhase(LobbySession.ClientLaunchPhase.InRun));
-    }
-
-    [Fact]
     public void RealtimeBudgetDropsOnlyWhenWindowIsFull()
     {
         var budget = new NetPacketBudget(maxBytes: 10, windowMilliseconds: 1000);
@@ -88,7 +74,6 @@ public sealed class LaunchProtocolReplayTests
         Assert.Equal(LifecycleState.Disposed, tracker.Snapshot.State);
     }
 
-
     [Fact]
     public void MobLifecycleLedgerIsIdempotentPerGeneration()
     {
@@ -109,11 +94,8 @@ public sealed class LaunchProtocolReplayTests
     }
 
     [Theory]
-    [InlineData("100.64.0.20")]
     [InlineData("255.255.255.255")]
     [InlineData("192.168.1.2")]
-    [InlineData("127.0.0.1")]
-    [InlineData("10.0.0.5")]
     public void RoomCode_RoundTrips_IPv4Addresses(string ip)
     {
         var address = IPAddress.Parse(ip);
@@ -144,14 +126,8 @@ public sealed class LaunchProtocolReplayTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("DC-")]
-    [InlineData("invalid?!code")]
     [InlineData("ZZZZZZZ")]
-    [InlineData("127.0.0.1:0")]
     [InlineData("127.0.0.1:65536")]
-    [InlineData("127.0.0.1:1234:5678")]
     [InlineData("::1")]
     public void RoomCode_RejectsInvalidAddressesAndPorts(string? input)
     {

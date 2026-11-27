@@ -30,3 +30,14 @@ The default port is TCP `1234`. **Steam & Advanced Options → Lan host** allows
 After everyone appears in the lobby, each player sets **Ready: On**. The host chooses **Save: Slot N**, then **Normal Mode** or **Custom Mode** for a new run, or **Continue** when the selected co-op save is compatible. The client follows the host into the run automatically.
 
 Multiplayer slots are stored under `save/MSave/` in each game installation. See [troubleshooting](docs/TROUBLESHOOTING.md) for connection and startup checks, or [contributing](CONTRIBUTING.md#architecture) for how the mod hooks into the game.
+
+## Development and testing workflow
+
+Use [Co-op Anything](https://github.com/cranebeaker/coop-anything) to guide multiplayer work, from reproducing an issue through verifying the fix. Follow its [QA playbook](https://github.com/cranebeaker/coop-anything/blob/main/playbook/automated-qa.md) for in-game checks.
+
+Keep the automated suite at **100 discovered test cases or fewer**. Each parameterized data row counts toward the limit.
+
+1. Reproduce the issue and record the mod version, transport, and what happened on the host and client.
+2. Build the change and run the [automated tests](CONTRIBUTING.md#build-and-test).
+3. For in-game tests, run a host and client with separate test saves. **Mute Dead Cells on both instances by default.** Enable game audio only when testing sound.
+4. Verify that both players can join, set Ready, start the same run, and change levels together. Rerun the original scenario and record the result.

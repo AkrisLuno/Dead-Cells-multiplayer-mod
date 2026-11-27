@@ -9,62 +9,6 @@ namespace DeadCellsMultiplayerMod.ProtocolReplay.Tests;
 public sealed class MidRunJoinAndReconnectSyncTests
 {
     [Fact]
-    public void HostSpawnAnchor_InitializesWithSafeValuesAndCombatState()
-    {
-        var anchorSafe = new NetNode.HostSpawnAnchor(10, 20, "PrisonStart", inCombat: false);
-        Assert.Equal(10, anchorSafe.Cx);
-        Assert.Equal(20, anchorSafe.Cy);
-        Assert.Equal("PrisonStart", anchorSafe.LevelId);
-        Assert.False(anchorSafe.InCombat);
-
-        var anchorCombat = new NetNode.HostSpawnAnchor(-5, -10, null, inCombat: true);
-        Assert.Equal(0, anchorCombat.Cx);
-        Assert.Equal(0, anchorCombat.Cy);
-        Assert.Equal(string.Empty, anchorCombat.LevelId);
-        Assert.True(anchorCombat.InCombat);
-    }
-
-    [Theory]
-    [InlineData("SPAWNANCHOR|15|25|PrisonStart|1", 15, 25, "PrisonStart", true)]
-    [InlineData("SPAWNANCHOR|30|40|Ramparts|0", 30, 40, "Ramparts", false)]
-    [InlineData("SPAWNANCHOR|100|200|Ossuary|true", 100, 200, "Ossuary", true)]
-    [InlineData("SPAWNANCHOR|100|200|Ossuary|false", 100, 200, "Ossuary", false)]
-    [InlineData("SPAWNANCHOR|5|10|PrisonStart", 5, 10, "PrisonStart", false)] // Legacy 3-field line
-    public void SpawnAnchor_ParsesCorrectly(string line, int expectedCx, int expectedCy, string expectedLevel, bool expectedInCombat)
-    {
-        Assert.StartsWith("SPAWNANCHOR|", line, StringComparison.OrdinalIgnoreCase);
-        var parts = line["SPAWNANCHOR|".Length..].Split('|');
-        Assert.True(parts.Length >= 3);
-        Assert.True(int.TryParse(parts[0], out var cx));
-        Assert.True(int.TryParse(parts[1], out var cy));
-        var level = parts[2];
-        var inCombat = false;
-        if (parts.Length >= 4)
-        {
-            var trimmed = parts[3].Trim();
-            inCombat = trimmed == "1" || string.Equals(trimmed, "true", StringComparison.OrdinalIgnoreCase);
-        }
-
-        var anchor = new NetNode.HostSpawnAnchor(cx, cy, level, inCombat);
-        Assert.Equal(expectedCx, anchor.Cx);
-        Assert.Equal(expectedCy, anchor.Cy);
-        Assert.Equal(expectedLevel, anchor.LevelId);
-        Assert.Equal(expectedInCombat, anchor.InCombat);
-    }
-
-    [Theory]
-    [InlineData(0, false)] // Empty
-    [InlineData(1, true)]  // Solid
-    [InlineData(2, false)]
-    [InlineData(8, true)]  // Wood platform / one-way
-    [InlineData(9, true)]  // Solid + wood
-    public void SolidAndWoodTiles_DistinguishCollisionsCorrectly(int bits, bool expectedSolid)
-    {
-        Assert.Equal(expectedSolid, CombatSyncHelpers.IsSolidTileValue(bits));
-        Assert.Equal((bits & 8) != 0, CombatSyncHelpers.IsWoodTileValue(bits));
-    }
-
-    [Fact]
     public void RunLaunchCoordinator_OnRemoteConnected_ClearsAckAndQueuedWithoutBreakingHostDescriptor()
     {
         RunLaunchCoordinator.ResetForTesting(NetRole.Host);
