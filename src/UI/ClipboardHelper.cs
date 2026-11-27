@@ -8,6 +8,9 @@ namespace DeadCellsMultiplayerMod.UI
         private const uint GmemMoveable = 0x0002;
 
         [DllImport("user32.dll")]
+        private static extern IntPtr GetActiveWindow();
+
+        [DllImport("user32.dll")]
         private static extern bool OpenClipboard(IntPtr hWndNewOwner);
 
         [DllImport("user32.dll")]
@@ -80,7 +83,9 @@ namespace DeadCellsMultiplayerMod.UI
         {
             try
             {
-                if (!OpenClipboard(IntPtr.Zero))
+                // EmptyClipboard needs a window owner before SetClipboardData can transfer memory.
+                var owner = GetActiveWindow();
+                if (owner == IntPtr.Zero || !OpenClipboard(owner))
                     return false;
 
                 try

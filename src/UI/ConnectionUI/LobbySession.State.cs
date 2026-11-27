@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using dc.pr;
 using dc.ui;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
@@ -30,7 +29,7 @@ namespace DeadCellsMultiplayerMod
         internal static bool _addMenuHookRegistered;
         internal static WeakReference<TitleScreen?>? _titleScreenRef;
         internal static string _mpIp = "127.0.0.1";
-        internal static int _mpPort = 1234;
+        internal static int _mpPort = LanRoomCode.DefaultPort;
         internal static string _mpRoomCodeOrIp = string.Empty;
         internal static NetRole _menuSelection = NetRole.None;
         internal enum ConnectionTransport
@@ -91,121 +90,7 @@ namespace DeadCellsMultiplayerMod
         internal static int _menuRebuildDepth;
         internal static bool _genArrived;
         internal static LevelDescSync? _cachedLevelDescSync;
-        internal static readonly object TextInputSync = new();
-        internal static WeakReference<TextInput?>? _activeTextInputRef;
-        internal static bool _activeTextInputNoSpaces;
-        internal const int KeyCtrl = 17;
-        internal const int KeyLCtrl = 162;
-        internal const int KeyRCtrl = 163;
-        internal const int KeyC = 67;
-        internal const int KeyV = 86;
-        internal const int KeySpace = 32;
-        internal const int KeyEsc = 27;
-        internal const uint CfUnicodeText = 13;
-        internal const uint GmemMoveable = 0x0002;
-
-        [DllImport("user32.dll")]
-        private static extern bool OpenClipboard(IntPtr hWndNewOwner);
-        [DllImport("user32.dll")]
-        private static extern bool CloseClipboard();
-        [DllImport("user32.dll")]
-        private static extern bool EmptyClipboard();
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetClipboardData(uint uFormat);
-        [DllImport("user32.dll")]
-        private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
-        [DllImport("user32.dll")]
-        private static extern bool IsClipboardFormatAvailable(uint format);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalLock(IntPtr hMem);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool GlobalUnlock(IntPtr hMem);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalFree(IntPtr hMem);
-
-        // ================= ROOM CODE & NETWORK HELPERS =================
-
-        internal static string IpToRoomCode(string ipStr)
-        {
-            if (IPAddress.TryParse(ipStr, out var ip))
-            {
-                var bytes = ip.GetAddressBytes();
-                if (bytes.Length == 4)
-                {
-                    uint val = ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | (uint)bytes[3];
-                    const string chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                    var result = string.Empty;
-                    while (val > 0)
-                    {
-                        int rem = (int)(val % 36);
-                        result = chars[rem] + result;
-                        val /= 36;
-                    }
-                    return result.Length > 0 ? result : "0";
-                }
-            }
-            return ipStr;
-        }
-
-        internal static bool TryParseRoomCodeOrIp(string? input, out string ipStr, out int port)
-        {
-            port = _mpPort > 0 ? _mpPort : 1234;
-            ipStr = "127.0.0.1";
-            if (string.IsNullOrWhiteSpace(input))
-                return false;
-
-            input = input.Trim();
-            if (input.StartsWith("DC-", StringComparison.OrdinalIgnoreCase))
-                input = input.Substring(3);
-
-            // Direct IP:Port
-            if (input.Contains(':'))
-            {
-                var parts = input.Split(':');
-                if (IPAddress.TryParse(parts[0], out var parsedIp) && int.TryParse(parts[1], out var parsedPort))
-                {
-                    ipStr = parsedIp.ToString();
-                    port = parsedPort;
-                    return true;
-                }
-            }
-
-            // Direct IP
-            if (IPAddress.TryParse(input, out var directIp))
-            {
-                ipStr = directIp.ToString();
-                return true;
-            }
-
-            // Base36 Room Code
-            try
-            {
-                const string chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                uint val = 0;
-                string upper = input.ToUpperInvariant();
-                foreach (char c in upper)
-                {
-                    int idx = chars.IndexOf(c);
-                    if (idx < 0) return false;
-                    val = (val * 36) + (uint)idx;
-                }
-
-                byte b1 = (byte)((val >> 24) & 0xFF);
-                byte b2 = (byte)((val >> 16) & 0xFF);
-                byte b3 = (byte)((val >> 8) & 0xFF);
-                byte b4 = (byte)(val & 0xFF);
-                ipStr = $"{b1}.{b2}.{b3}.{b4}";
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        internal static (string tailscaleIp, string lanIp, string bestIp, string roomCode) GetHostNetworkInfo()
+        internal static (string tailscaleIp, string lanIp, string roomCode) GetHostNetworkInfo()
         {
             string tailscaleIp = string.Empty;
             string lanIp = string.Empty;
@@ -232,8 +117,9 @@ namespace DeadCellsMultiplayerMod
             string bestIp = !string.IsNullOrEmpty(tailscaleIp) ? tailscaleIp :
                             (!string.IsNullOrEmpty(lanIp) ? lanIp : "127.0.0.1");
 
-            string roomCode = IpToRoomCode(bestIp);
-            return (tailscaleIp, lanIp, bestIp, roomCode);
+            var port = NetRef?.ListenerEndpoint?.Port ?? _mpPort;
+            var roomCode = LanRoomCode.Format(IPAddress.Parse(bestIp), port);
+            return (tailscaleIp, lanIp, roomCode);
         }
 
         internal static string GetLanLobbyCodeForUi()
@@ -242,10 +128,5 @@ namespace DeadCellsMultiplayerMod
             return info.roomCode;
         }
 
-        internal static void CopyHostInfoToClipboard()
-        {
-            var info = GetHostNetworkInfo();
-            DeadCellsMultiplayerMod.UI.ClipboardHelper.TrySetClipboardText(info.roomCode);
-        }
     }
 }

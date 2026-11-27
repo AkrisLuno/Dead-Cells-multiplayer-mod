@@ -6,8 +6,8 @@ namespace DeadCellsMultiplayerMod;
 /// </summary>
 internal static class BuildInfo
 {
-    public const string Version = "0.8.91";
-    public const string SourceMarker = "v0.8.91-online-worldsync-p19";
+    public static readonly string Version = typeof(BuildInfo).Assembly.GetName().Version!.ToString(3);
+    public static readonly string SourceMarker = $"v{Version}-online-worldsync-p{NetworkProtocolVersion}";
     // Protocol 19: launch convergence, level-boundary identity, sequenced level seeds and ordered player positions.
     //   * The host re-publishes the full launch prerequisite set (GEN/CGDATA/RUNCOMMIT/SEED/
     //     RUNEXEC) until the client confirms, and GEN is host-cached and replayed to late joiners.

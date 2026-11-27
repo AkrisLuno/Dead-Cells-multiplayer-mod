@@ -1,65 +1,36 @@
-<div align="center">
+﻿# Contributing
 
-English • [Русский](CONTRIBUTING_RU.md)
-  
-</div>
-# Contributing to DeadCellsMultiplayerMod
+[Русский](CONTRIBUTING_RU.md)
 
-Thank you for your interest in improving DeadCellsMultiplayerMod. This document describes how to build the project and what we expect from contributions.
+## Build and test
 
-## Prerequisites
+Use Windows x64, the .NET 10 SDK, and the full [DCCM v35.14.1 Windows archive](https://github.com/dead-cells-core-modding/core/releases/tag/v35.14.1). The build needs the MDK, including its `packages` and `tools` directories. You can point to an existing game installation or to a separately extracted DCCM archive.
 
-- **Windows** (the project targets `net10.0` with `SupportedOSPlatform` Windows).
-- **.NET SDK** compatible with **.NET 10** (see `TargetFramework` in `DeadCellsMultiplayerMod.csproj`).
-- **Dead Cells** with **DCCM (Dead Cells Core Modding API)** installed for local testing.
-- Optional: **`DCCM_MDK_ROOT`** environment variable pointing at your DCCM MDK/tools folder if you need Steamworks references (`Steamworks.NET`, `steam_api64.dll`) resolved via the paths in the project file.
-
-## Build
-
-From the repository root:
+From the repository root in PowerShell:
 
 ```powershell
+$env:DCCM_MDK_ROOT = 'C:\Games\Dead Cells\coremod\core\mdk'
+dotnet --list-sdks
 dotnet build -c Release
+dotnet test -c Release --no-build
 ```
 
-Output artifacts are produced under `bin/Release/net10.0/` (and the packaged mod layout as configured by the DCCM MDK targets).
+Replace the example path with yours. If your SDK is installed at `$env:USERPROFILE\.dotnet`, put that directory first on `Path` for this shell so both the build and the DCCM packaging tool use .NET 10:
 
-For iterative development with automatic install into your DCCM layout, use **Debug** configuration (`AutoInstallMod` is enabled for Debug in the csproj).
+```powershell
+$env:DOTNET_ROOT = "$env:USERPROFILE\.dotnet"
+$env:Path = "$env:DOTNET_ROOT;$env:Path"
+```
 
-## Project layout (high level)
+The packaged output is `src/bin/Release/net10.0/win-x64/output/DeadCellsMultiplayerMod/`. The build leaves your game installation alone. To run it, use the [installation guide](README.md#install) to copy the package and start the DCCM launcher. CI uses the same MDK version, runs the tests, and uploads the mod package.
 
-- `ModEntry.cs` — mod entry point and lifecycle.
-- `Mobs/` — mob synchronization, wire codecs, tracing.
-- `Ghost/` — remote player ghost and related hooks.
-- `UI/` — in-game UI.
-- `Resourcefile/lang/` — localization (`.po` / `.pot`).
-- `server/` — networking (`NetNode`, wire protocol).
+## Architecture
 
-## How to contribute
-1. **Open an issue** or discuss a **small, scoped** change before large refactors.
-2. **Fork** the repository and create a **branch** focused on one feature or fix.
-3. **Keep pull requests focused** — avoid unrelated formatting, renames, or drive-by cleanups in files you are not changing for the task.
-4. **Match existing style** — naming, patterns, and comment density should match surrounding code.
-5. **Build** in Release before submitting; fix any new compiler warnings relevant to your change.
-6. **Describe** what changed and **why** in the PR description (plain language, complete sentences).
+1. **Game startup.** DCCM loads the package from `modinfo.json` and invokes [ModEntry](src/ModEntry/ModEntry.cs). The mod installs hooks into Dead Cells' existing game lifecycle and adds the multiplayer entry to the title screen.
+2. **Lobby and transport.** [LobbySession](src/UI/ConnectionUI/LobbySession.cs) connects the title menu to [NetNode](src/server/server.cs). TCP listens on the host's IPv4 interfaces. Steam discovers the lobby and routes gameplay through Steam P2P. Both use the mod protocol, which checks build and protocol version at the handshake.
+3. **Run startup.** [RunLaunchCoordinator](src/LaunchSync/RunLaunchCoordinator.cs) tracks the host's run settings and seed, the clients' acknowledgments, and the execute message. [GameDataSync](src/GameDataSync/GameDataSync.cs) synchronizes the level seed and graph, and [MultiplayerSaves](src/UI/ConnectionUI/MultiplayerSaves.cs) routes multiplayer saves to `save/MSave/`.
+4. **During the run.** Each player controls their own hero. [Ghost](src/Ghost/) renders remote players. [Mobs](src/Mobs/) handles host-owned enemies and bosses, including state snapshots for clients. [Interaction](src/Interaction/) and [LevelExitSync](src/UI/LevelExitSync.cs) handle objects and transitions.
 
-## Code review expectations
+## Verify gameplay changes
 
-- Changes should be **minimal** and **directly related** to the stated goal.
-- Do **not** delete unrelated comments or rewrite large sections without need.
-- Prefer **one clear code path** over many special cases when possible.
-- New user-facing strings belong in **localization** (`Resourcefile/lang/`) when applicable.
-
-## Testing
-
-There is no automated test suite in this repository. For gameplay changes:
-
-- Run the game **through DCCM** with the mod loaded.
-- For multiplayer, verify **host** and **client** behavior when you touch sync or networking code.
-
-## Questions
-
-For DCCM installation and API documentation, see the official DCCM docs and GitHub:
-
-- [DCCM install (Steam Workshop)](https://dead-cells-core-modding.github.io/docs/docs/tutorial/install-workshop/)
-- [dead-cells-core-modding/core](https://github.com/dead-cells-core-modding/core)
+The suite under `tests/` covers protocol, launch ordering, reconnect and synchronization regression cases. For in-game checks, run two installations with separate saves. Verify that both peers reach the lobby, mark Ready, start the same run, and transition together. Changes to Steam and LAN should be tested on their respective transport.

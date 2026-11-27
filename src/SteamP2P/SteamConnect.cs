@@ -9,6 +9,7 @@ using Microsoft.Win32;
 using ModCore.Utilities;
 using Newtonsoft.Json;
 using Steamworks;
+using DeadCellsMultiplayerMod.UI;
 
 namespace DeadCellsMultiplayerMod
 {
@@ -43,39 +44,6 @@ namespace DeadCellsMultiplayerMod
         private static readonly object HostWorkerSync = new();
         private static Process? _hostWorkerProcess;
         private static string? _hostWorkerStopSignalPath;
-
-        private const uint CfUnicodeText = 13;
-        private const uint GmemMoveable = 0x0002;
-
-        [DllImport("user32.dll")]
-        private static extern bool OpenClipboard(IntPtr hWndNewOwner);
-
-        [DllImport("user32.dll")]
-        private static extern bool CloseClipboard();
-
-        [DllImport("user32.dll")]
-        private static extern bool EmptyClipboard();
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetClipboardData(uint uFormat);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
-
-        [DllImport("user32.dll")]
-        private static extern bool IsClipboardFormatAvailable(uint format);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalLock(IntPtr hMem);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool GlobalUnlock(IntPtr hMem);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GlobalFree(IntPtr hMem);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool SetDllDirectory(string lpPathName);
@@ -251,7 +219,7 @@ namespace DeadCellsMultiplayerMod
                 Error = "Clipboard does not contain a valid Steam lobby id"
             };
 
-            var clipboardText = TryGetClipboardText();
+            var clipboardText = ClipboardHelper.TryGetClipboardText();
             if (!TryParseLobbyInput(clipboardText, out var lobbyId, out var lobbyCode))
                 return false;
 
@@ -513,7 +481,7 @@ namespace DeadCellsMultiplayerMod
                 return false;
 
             var text = lobbyId.ToString(CultureInfo.InvariantCulture);
-            return TrySetClipboardText(text);
+            return ClipboardHelper.TrySetClipboardText(text);
         }
 
         internal static bool TryCopyLobbyCodeToClipboard(string? lobbyCode)
@@ -521,7 +489,7 @@ namespace DeadCellsMultiplayerMod
             if (string.IsNullOrWhiteSpace(lobbyCode))
                 return false;
 
-            return TrySetClipboardText(lobbyCode.Trim());
+            return ClipboardHelper.TrySetClipboardText(lobbyCode.Trim());
         }
 
         internal static string BuildLobbyCodeFromLobbyId(ulong lobbyId)
@@ -1918,98 +1886,6 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static string? TryGetClipboardText()
-        {
-            try
-            {
-                if (!IsClipboardFormatAvailable(CfUnicodeText))
-                    return null;
-                if (!OpenClipboard(IntPtr.Zero))
-                    return null;
-
-                try
-                {
-                    var handle = GetClipboardData(CfUnicodeText);
-                    if (handle == IntPtr.Zero)
-                        return null;
-
-                    var ptr = GlobalLock(handle);
-                    if (ptr == IntPtr.Zero)
-                        return null;
-
-                    try
-                    {
-                        return Marshal.PtrToStringUni(ptr);
-                    }
-                    finally
-                    {
-                        GlobalUnlock(handle);
-                    }
-                }
-                finally
-                {
-                    CloseClipboard();
-                }
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static bool TrySetClipboardText(string text)
-        {
-            try
-            {
-                if (!OpenClipboard(IntPtr.Zero))
-                    return false;
-
-                try
-                {
-                    if (!EmptyClipboard())
-                        return false;
-
-                    var value = text ?? string.Empty;
-                    var bytes = (value.Length + 1) * 2;
-                    var hGlobal = GlobalAlloc(GmemMoveable, (UIntPtr)bytes);
-                    if (hGlobal == IntPtr.Zero)
-                        return false;
-
-                    var target = GlobalLock(hGlobal);
-                    if (target == IntPtr.Zero)
-                    {
-                        GlobalFree(hGlobal);
-                        return false;
-                    }
-
-                    try
-                    {
-                        Marshal.Copy(value.ToCharArray(), 0, target, value.Length);
-                        Marshal.WriteInt16(target, value.Length * 2, 0);
-                    }
-                    finally
-                    {
-                        GlobalUnlock(hGlobal);
-                    }
-
-                    if (SetClipboardData(CfUnicodeText, hGlobal) == IntPtr.Zero)
-                    {
-                        GlobalFree(hGlobal);
-                        return false;
-                    }
-
-                    return true;
-                }
-                finally
-                {
-                    CloseClipboard();
-                }
-            }
-            catch
-            {
-                return false;
-            }
-        }
     }
 }
 

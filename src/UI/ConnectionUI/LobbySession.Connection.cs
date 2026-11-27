@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using dc.pr;
 using dc.ui;
 using HaxeProxy.Runtime;
@@ -10,6 +9,7 @@ using Microsoft.Win32;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using ModCore.Modules;
+using DeadCellsMultiplayerMod.UI;
 
 namespace DeadCellsMultiplayerMod
 {
@@ -128,18 +128,21 @@ namespace DeadCellsMultiplayerMod
                 else
                 {
                     var netInfo = GetHostNetworkInfo();
+                    var port = NetRef?.ListenerEndpoint?.Port ?? _mpPort;
                     UiInfo($"Room Code: {netInfo.roomCode}", 0xF7FC65);
                     if (!string.IsNullOrEmpty(netInfo.tailscaleIp))
-                        UiInfo($"Tailscale IP: {netInfo.tailscaleIp}:1234", 0x59D5FF);
+                        UiInfo($"Tailscale IP: {netInfo.tailscaleIp}:{port}", 0x59D5FF);
                     if (!string.IsNullOrEmpty(netInfo.lanIp) && netInfo.lanIp != netInfo.tailscaleIp)
-                        UiInfo($"LAN IP: {netInfo.lanIp}:1234", 0x8A93A6);
+                        UiInfo($"LAN IP: {netInfo.lanIp}:{port}", 0x8A93A6);
 
                     UiButton(
-                        "Copy Room Code & IP",
+                        "Copy Room Code",
                         () =>
                         {
-                            CopyHostInfoToClipboard();
-                            MultiplayerUI.PushSystemMessage($"Copied room code {netInfo.roomCode} to Clipboard!");
+                            if (ClipboardHelper.TrySetClipboardText(netInfo.roomCode))
+                                MultiplayerUI.PushSystemMessage("Room code copied to clipboard");
+                            else
+                                MultiplayerUI.PushSystemMessage("Could not copy the room code");
                         },
                         "Copy Room Code to share with friends");
                 }
@@ -164,7 +167,6 @@ namespace DeadCellsMultiplayerMod
                 }
                 UiButton(GetText.Instance.GetString("Back"), () =>
                 {
-                    var transport = _menuTransport;
                     StopNetworkFromMenu();
                     SetRole(NetRole.None);
                     _menuSelection = NetRole.None;
@@ -216,13 +218,15 @@ namespace DeadCellsMultiplayerMod
                 screen.clearMenu();
 
                 UiBegin();
-                UiInfo(Localize("Connected — ready up and wait for the host to launch."), 0x9098A8);
+                var connected = NetRef is { IsAlive: true, id: > 0 };
+                var status = connected ? "Connected — ready up and wait for the host to launch." : "Connecting to host…";
+                UiInfo(Localize(status), 0x9098A8);
                 UiInfo($"Selected mode: {GetPendingLaunchSummaryLabel(screen)}", 0xE0E0E0);
                 if (_menuTransport == ConnectionTransport.Steam)
                     UiInfo(Localize("Transport: Steam"), 0x8A93A6);
                 else
                     UiInfo(Localize("Transport: LAN"), 0x8A93A6);
-                UiButton(GetReadyButtonLabel(), () => ToggleLocalReadyFromMenu(screen), Localize("Toggle your ready state"));
+                UiButton(GetReadyButtonLabel(), () => ToggleLocalReadyFromMenu(screen), Localize("Toggle your ready state"), connected);
                 var multiplayerSaveLabel = GetMultiplayerSaveButtonLabel();
                 UiButton(multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), Localize("Choose multiplayer save slot"));
                 UiButton(
@@ -256,7 +260,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        internal static void ShowLobbyNotFoundPopup(TitleScreen screen)
+        internal static void ShowLobbyNotFoundPopup(TitleScreen screen, ConnectionTransport transport)
         {
             var prevSuppress = _suppressAutoButton;
             _suppressAutoButton = true;
@@ -270,7 +274,13 @@ namespace DeadCellsMultiplayerMod
                 UiInfo(GetText.Instance.GetString("Can't find lobby"), 0xFF9090);
                 UiButton(
                     GetText.Instance.GetString("OK"),
-                    () => ShowConnectionMenu(screen, NetRole.Client),
+                    () =>
+                    {
+                        if (transport == ConnectionTransport.Steam)
+                            ShowJoinTransportMenu(screen);
+                        else
+                            ShowSimplifiedJoinMenu(screen);
+                    },
                     GetText.Instance.GetString("Return to join menu"));
 
                 RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
@@ -422,12 +432,13 @@ namespace DeadCellsMultiplayerMod
 
         internal static void NotifyClientConnectFailed()
         {
+            var transport = _menuTransport;
             StopNetworkFromMenu();
             ResetClientConnectState();
             _menuSelection = NetRole.Client;
 
             var ts = GetTitleScreen();
-            if (ts != null) ShowLobbyNotFoundPopup(ts);
+            if (ts != null) ShowLobbyNotFoundPopup(ts, transport);
         }
 
         public static void NotifyRemoteDisconnected(NetRole role)
@@ -864,7 +875,7 @@ namespace DeadCellsMultiplayerMod
         {
             public string user { get; set; } = "guest";
             public string last_ip { get; set; } = "127.0.0.1";
-            public int last_port { get; set; } = 1234;
+            public int last_port { get; set; } = LanRoomCode.DefaultPort;
             public string player_id { get; set; } = Guid.NewGuid().ToString("N");
             public string last_code_or_ip { get; set; } = string.Empty;
         }
@@ -890,9 +901,16 @@ namespace DeadCellsMultiplayerMod
                     {
                         _username = CleanUsername(string.IsNullOrWhiteSpace(cfg.user) ? GetDefaultUsername() : cfg.user);
                         _mpIp = string.IsNullOrWhiteSpace(cfg.last_ip) ? "127.0.0.1" : cfg.last_ip.Trim();
-                        _mpPort = cfg.last_port <= 0 || cfg.last_port > 65535 ? 1234 : cfg.last_port;
+                        _mpPort = cfg.last_port <= 0 || cfg.last_port > 65535 ? LanRoomCode.DefaultPort : cfg.last_port;
                         _playerId = string.IsNullOrWhiteSpace(cfg.player_id) ? Guid.NewGuid().ToString("N") : cfg.player_id.Trim();
                         _mpRoomCodeOrIp = string.IsNullOrWhiteSpace(cfg.last_code_or_ip) ? string.Empty : cfg.last_code_or_ip.Trim();
+                        // Older configs stored the port separately even when the room code omitted it.
+                        if (_mpPort != LanRoomCode.DefaultPort && !_mpRoomCodeOrIp.Contains(':') &&
+                            LanRoomCode.TryParse(_mpRoomCodeOrIp, out var savedTarget) &&
+                            savedTarget.Address.ToString() == _mpIp)
+                        {
+                            _mpRoomCodeOrIp = FormattableString.Invariant($"{_mpRoomCodeOrIp}:{_mpPort}");
+                        }
                         return;
                     }
                 }
@@ -904,7 +922,7 @@ namespace DeadCellsMultiplayerMod
 
             _username = CleanUsername(GetDefaultUsername());
             _mpIp = "127.0.0.1";
-            _mpPort = 1234;
+            _mpPort = LanRoomCode.DefaultPort;
             _playerId = Guid.NewGuid().ToString("N");
             _mpRoomCodeOrIp = string.Empty;
             SaveConfig();
@@ -1107,311 +1125,13 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        internal static void HandleTextInputClipboardShortcuts()
-        {
-            var textInput = GetActiveTextInput();
-            if (textInput == null)
-                return;
-
-            if (!IsTextInputActive(textInput))
-            {
-                ClearActiveTextInput();
-                return;
-            }
-
-            if (_activeTextInputNoSpaces)
-                RemoveSpacesFromTextInput(textInput);
-
-            if (dc.hxd.Key.Class.isPressed(KeyEsc))
-            {
-                try
-                {
-                    textInput.cancel();
-                }
-                finally
-                {
-                    ClearActiveTextInput();
-                }
-                return;
-            }
-
-            if (dc.hxd.Key.Class.isPressed(KeySpace))
-            {
-                try
-                {
-                    textInput.validate();
-                }
-                finally
-                {
-                    ClearActiveTextInput();
-                }
-                return;
-            }
-
-            if (!IsCtrlDown())
-                return;
-
-            if (dc.hxd.Key.Class.isPressed(KeyC))
-            {
-                if (TryGetTextInputValue(textInput, out var text))
-                    TrySetClipboardText(text);
-                return;
-            }
-
-            if (dc.hxd.Key.Class.isPressed(KeyV))
-            {
-                var clip = TryGetClipboardText();
-                if (!string.IsNullOrEmpty(clip))
-                {
-                    if (_activeTextInputNoSpaces)
-                        clip = RemoveSpaces(clip);
-                    TrySetTextInputValue(textInput, clip);
-                }
-            }
-        }
-
-        internal static bool IsCtrlDown()
-        {
-            return dc.hxd.Key.Class.isDown(KeyCtrl) || dc.hxd.Key.Class.isDown(KeyLCtrl) || dc.hxd.Key.Class.isDown(KeyRCtrl);
-        }
-
-        internal static void RegisterActiveTextInput(TextInput input, bool noSpaces)
-        {
-            lock (TextInputSync)
-            {
-                _activeTextInputRef = new WeakReference<TextInput?>(input);
-                _activeTextInputNoSpaces = noSpaces;
-            }
-        }
-
-        internal static void ClearActiveTextInput()
-        {
-            lock (TextInputSync)
-            {
-                _activeTextInputRef = null;
-                _activeTextInputNoSpaces = false;
-            }
-        }
-
-        internal static TextInput? GetActiveTextInput()
-        {
-            lock (TextInputSync)
-            {
-                if (_activeTextInputRef != null && _activeTextInputRef.TryGetTarget(out var input))
-                    return input;
-            }
-
-            return null;
-        }
-
-        internal static bool IsTextInputActive(TextInput input)
-        {
-            var active = GetMemberValue(input, "isActive", true) ?? GetMemberValue(input, "active", true);
-            if (active is bool activeBool)
-                return activeBool;
-
-            var visible = GetMemberValue(input, "visible", true) ?? GetMemberValue(input, "isVisible", true);
-            if (visible is bool visibleBool)
-                return visibleBool;
-
-            var target = GetTextInputTarget(input);
-            var focused = GetMemberValue(target, "hasFocus", true) ?? GetMemberValue(target, "focused", true);
-            if (focused is bool focusedBool)
-                return focusedBool;
-
-            return true;
-        }
-
-        internal static object? GetTextInputTarget(TextInput input)
-        {
-            return GetMemberValue(input, "input", true)
-                ?? GetMemberValue(input, "textInput", true)
-                ?? GetMemberValue(input, "textField", true)
-                ?? input;
-        }
-
-        internal static bool TryGetTextInputValue(TextInput input, out string text)
-        {
-            text = string.Empty;
-            var target = GetTextInputTarget(input);
-            if (target == null)
-                return false;
-
-            var value = GetMemberValue(target, "text", true)
-                ?? GetMemberValue(target, "value", true)
-                ?? GetMemberValue(target, "str", true);
-            if (value == null)
-                return false;
-
-            if (value is dc.String ds)
-            {
-                text = ds.ToString() ?? string.Empty;
-                return true;
-            }
-
-            text = value.ToString() ?? string.Empty;
-            return true;
-        }
-
-        internal static bool TrySetTextInputValue(TextInput input, string text)
-        {
-            var target = GetTextInputTarget(input);
-            if (target == null)
-                return false;
-
-            if (TryInvokeTextInputSetter(target, MakeHLString(text))
-                || TryInvokeTextInputSetter(target, text))
-                return true;
-
-            return TrySetMember(target, "text", MakeHLString(text))
-                || TrySetMember(target, "value", MakeHLString(text))
-                || TrySetMember(target, "str", MakeHLString(text))
-                || TrySetMember(target, "text", text)
-                || TrySetMember(target, "value", text)
-                || TrySetMember(target, "str", text);
-        }
-
-        internal static bool TryInvokeTextInputSetter(object target, object value)
-        {
-            var type = target.GetType();
-            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase;
-            foreach (var name in new[] { "setText", "set_text", "setValue", "set_value" })
-            {
-                var method = type.GetMethod(name, flags);
-                if (method == null)
-                    continue;
-
-                try
-                {
-                    method.Invoke(target, new[] { value });
-                    return true;
-                }
-                catch
-                {
-                    // Try next setter.
-                }
-            }
-
-            return false;
-        }
-
-        internal static void RemoveSpacesFromTextInput(TextInput input)
-        {
-            if (!TryGetTextInputValue(input, out var text))
-                return;
-
-            if (!text.Contains(' ', StringComparison.Ordinal))
-                return;
-
-            TrySetTextInputValue(input, RemoveSpaces(text));
-        }
-
-        internal static string RemoveSpaces(string value)
-        {
-            return value.Replace(" ", string.Empty, StringComparison.Ordinal);
-        }
-
-        internal static string? TryGetClipboardText()
-        {
-            try
-            {
-                if (!IsClipboardFormatAvailable(CfUnicodeText))
-                    return null;
-                if (!OpenClipboard(IntPtr.Zero))
-                    return null;
-
-                try
-                {
-                    var handle = GetClipboardData(CfUnicodeText);
-                    if (handle == IntPtr.Zero)
-                        return null;
-
-                    var ptr = GlobalLock(handle);
-                    if (ptr == IntPtr.Zero)
-                        return null;
-
-                    try
-                    {
-                        return Marshal.PtrToStringUni(ptr);
-                    }
-                    finally
-                    {
-                        GlobalUnlock(handle);
-                    }
-                }
-                finally
-                {
-                    CloseClipboard();
-                }
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        internal static bool TrySetClipboardText(string text)
-        {
-            try
-            {
-                if (!OpenClipboard(IntPtr.Zero))
-                    return false;
-
-                try
-                {
-                    if (!EmptyClipboard())
-                        return false;
-
-                    var bytes = (text.Length + 1) * 2;
-                    var hGlobal = GlobalAlloc(GmemMoveable, (UIntPtr)bytes);
-                    if (hGlobal == IntPtr.Zero)
-                        return false;
-
-                    var target = GlobalLock(hGlobal);
-                    if (target == IntPtr.Zero)
-                    {
-                        GlobalFree(hGlobal);
-                        return false;
-                    }
-
-                    try
-                    {
-                        Marshal.Copy(text.ToCharArray(), 0, target, text.Length);
-                        Marshal.WriteInt16(target, text.Length * 2, 0);
-                    }
-                    finally
-                    {
-                        GlobalUnlock(hGlobal);
-                    }
-
-                    if (SetClipboardData(CfUnicodeText, hGlobal) == IntPtr.Zero)
-                    {
-                        GlobalFree(hGlobal);
-                        return false;
-                    }
-
-                    return true;
-                }
-                finally
-                {
-                    CloseClipboard();
-                }
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
         internal static void OpenTextInput(TitleScreen screen, string title, string initial, Action<string> onValidate, bool noSpaces = false)
         {
             try
             {
-                ClearActiveTextInput();
                 if (noSpaces && initial.Contains(' ', StringComparison.Ordinal))
-                    initial = RemoveSpaces(initial);
+                    initial = initial.Replace(" ", string.Empty, StringComparison.Ordinal);
                 var initialText = initial ?? string.Empty;
-                // Custom ConnectionUI prompt (stock TextInput dialog is too ugly for the hub).
                 ConnectionUI.ShowTextPrompt(
                     title,
                     initialText,
@@ -1419,7 +1139,7 @@ namespace DeadCellsMultiplayerMod
                     {
                         var text = value ?? string.Empty;
                         if (noSpaces)
-                            text = RemoveSpaces(text);
+                            text = text.Replace(" ", string.Empty, StringComparison.Ordinal);
                         onValidate(text);
                     },
                     onCancel: null,
@@ -1427,7 +1147,6 @@ namespace DeadCellsMultiplayerMod
             }
             catch (Exception ex)
             {
-                ClearActiveTextInput();
                 _log?.Warning("[NetMod] Failed to open text input: {Message}", ex.Message);
             }
         }

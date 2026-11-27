@@ -1132,7 +1132,6 @@ namespace DeadCellsMultiplayerMod
             orig(self, dt);
             PumpSteamCallbacksForOverlay();
             MainThreadPump.ProcessMainThreadQueue();
-            LobbySession.HandleTextInputClipboardShortcuts();
             _ghost?.UpdateLabels();
             ProcessCameraSpectateInput();
             TickRemoteKingSubLevelTransitionGuard();

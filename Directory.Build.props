@@ -1,5 +1,5 @@
 <Project>
-  <PropertyGroup>
-    <DCCM_MDK_ROOT Condition="'$(DCCM_MDK_ROOT)' == '' and Exists('$(MSBuildThisFileDirectory)release\coremod\core\mdk')">$(MSBuildThisFileDirectory)release\coremod\core\mdk</DCCM_MDK_ROOT>
+  <PropertyGroup Condition="'$(DCCM_MDK_ROOT)' != '' and Exists('$(DCCM_MDK_ROOT)/packages')">
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(DCCM_MDK_ROOT)/packages</RestoreAdditionalProjectSources>
   </PropertyGroup>
 </Project>

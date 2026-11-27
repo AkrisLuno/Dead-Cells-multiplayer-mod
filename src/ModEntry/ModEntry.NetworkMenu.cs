@@ -7,7 +7,7 @@ namespace DeadCellsMultiplayerMod
     {
         private IPEndPoint BuildEndpoint(string ipText, int port)
         {
-            if (port <= 0 || port > 65535) port = 1234;
+            if (port <= 0 || port > 65535) port = LanRoomCode.DefaultPort;
             if (!IPAddress.TryParse(ipText, out var ip))
             {
                 ip = IPAddress.Loopback;
@@ -24,11 +24,13 @@ namespace DeadCellsMultiplayerMod
         /// </summary>
         private static IPEndPoint BuildHostBindEndpoint(int port)
         {
-            if (port <= 0 || port > 65535) port = 1234;
+            if (port <= 0 || port > 65535) port = LanRoomCode.DefaultPort;
             return new IPEndPoint(IPAddress.Any, port);
         }
 
-        public void StartHostFromMenu(string ipText, int port)
+        public void StartHostFromMenu(string ipText, int port) => StartHostFromMenu(port);
+
+        internal void StartHostFromMenu(int port)
         {
             var ep = BuildHostBindEndpoint(port);
             StartHostWithEndpoint(ep);

@@ -7,3 +7,4 @@
 5. **No Desktop Pollution**: Never write scratch files or binaries to `C:\Users\Admin\Desktop\`.
 6. **100% English**: All code, comments, docstrings, commits, and tests must be in English.
 7. **Resource Bounds**: Keep CPU <= 80% and RAM <= 80%.
+8. **Test Limit**: Keep at most 100 discovered automated test cases across the solution. Each parameterized data row counts as one case. At the limit, remove an overlapping or lower-value case before adding another.
