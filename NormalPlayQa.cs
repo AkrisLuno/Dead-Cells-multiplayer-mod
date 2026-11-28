@@ -5,11 +5,13 @@ using Math = System.Math;
 using dc.en;
 using dc.hxd;
 using dc.pr;
+using dc.tool;
 using HaxeProxy.Runtime;
+using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod;
 
-internal sealed class NormalPlayQa(Action<string> report)
+internal sealed class NormalPlayQa(Action<string> report, string mode)
 {
     private const int Confirm = 13;
     private const int Left = 37;
@@ -18,6 +20,9 @@ internal sealed class NormalPlayQa(Action<string> report)
     private const int Dodge = 16;
     private const int Pause = 27;
     private const int Attack = 49;
+    private const int LeftSkill = 81;
+    private const int RightSkill = 69;
+    private readonly bool verifyEffects = mode is "effects" or "equipment";
     private int held;
     private long releaseAt;
     private long lastConfirm;
@@ -30,6 +35,13 @@ internal sealed class NormalPlayQa(Action<string> report)
     private bool peerJumped;
     private bool peerRollRendered;
     private bool peerJumpRendered;
+    private bool fixtureEquipped;
+    private bool actionSent;
+    private bool smokeTested;
+    private int projectileShots;
+    private static readonly (string Item, EquipmentKind Kind)[] EquipmentFixtures =
+        [("StartBow", EquipmentKind.Projectile), ("ExplosiveGrenade", EquipmentKind.Grenade),
+         ("HorizontalTurret", EquipmentKind.Deployable), ("Owl", EquipmentKind.Companion)];
 
     internal void UpdateInput()
     {
@@ -111,13 +123,23 @@ internal sealed class NormalPlayQa(Action<string> report)
             case 5:
                 if (age < 500)
                     break;
-                // This also exercises the empty weapon slot when no equipment has been collected.
-                Press(Attack, 100);
+                if (verifyEffects && !Equip(hero, "StartSword"))
+                    break;
+                Press(EquippedKey(hero, "StartSword", false), 100);
                 Advance();
                 break;
             case 6:
                 if (age < 300)
                     break;
+                if (verifyEffects)
+                {
+                    if (!HasLand(players.Effects.Captured))
+                        hero.onLand(0.5);
+                    hero._level.fx.dash(hero, hero.dir, 0x80FF, Ref<int>.Null, Ref<double>.Null);
+                    Advance();
+                    Advance();
+                    break;
+                }
                 Press(Pause, 110);
                 Advance();
                 break;
@@ -132,6 +154,15 @@ internal sealed class NormalPlayQa(Action<string> report)
                     Fail("pause menu did not open");
                 break;
             case 8:
+                if (verifyEffects)
+                {
+                    if (!VerifyEffects(players.Effects, age))
+                        break;
+                    if (mode == "effects")
+                        return true;
+                    Advance();
+                    break;
+                }
                 if (Game.Class.ME?.paused == false && held == 0 && peerJumped && peerJumpRendered &&
                     peerRollRendered && players.RemoteSounds > soundCount)
                 {
@@ -141,9 +172,150 @@ internal sealed class NormalPlayQa(Action<string> report)
                 if (age > 2800)
                     Fail($"partner playback missing. Paused={Game.Class.ME?.paused} JumpInput={peerJumped} JumpSprite={peerJumpRendered} RollSprite={peerRollRendered} Audio={players.RemoteSounds - soundCount}");
                 break;
+            case 9:
+                if (age < 700)
+                    break;
+                if (!fixtureEquipped)
+                {
+                    fixtureEquipped = Equip(hero, "StartShield");
+                    stageStarted = Stopwatch.GetTimestamp();
+                    break;
+                }
+                Press(EquippedKey(hero, "StartShield", false), 100);
+                Advance();
+                break;
+            case 10:
+                if (age < 850)
+                    break;
+                var effects = players.Effects;
+                var shield = effects.Captured[(int)EffectKind.ShieldParry] && effects.Played[(int)EffectKind.ShieldParry];
+                if (shield)
+                {
+                    report("COOP_QA EQUIPMENT ShieldParry=True");
+                    hero._level.fx.healing(hero, 0x48FF5B);
+                    fixtureEquipped = false;
+                    Advance();
+                }
+                else if (age >= 1400 && !actionSent)
+                {
+                    actionSent = true;
+                    Press(EquippedKey(hero, "StartShield", false), 100);
+                }
+                else if (age > 4500)
+                    Fail($"shield parry missing. Sprite={local.SpriteGroup} Sent={string.Join(',', effects.Captured)} Received={string.Join(',', effects.Played)}");
+                break;
+            default:
+                var fixture = (stage - 11) / 2;
+                if (fixture >= EquipmentFixtures.Length)
+                {
+                    if (!smokeTested)
+                    {
+                        if (!fixtureEquipped)
+                        {
+                            fixtureEquipped = Equip(hero, "SmokeBomb", active: true);
+                            stageStarted = Stopwatch.GetTimestamp();
+                            break;
+                        }
+                        if (age < 450)
+                            break;
+                        Press(EquippedKey(hero, "SmokeBomb", active: true), 420);
+                        smokeTested = true;
+                        stageStarted = Stopwatch.GetTimestamp();
+                        break;
+                    }
+                    var visible = players.Effects.Played;
+                    if (!visible[(int)EffectKind.Heal] || !visible[(int)EffectKind.Deflagration] ||
+                        !visible[(int)EffectKind.Smoke] || !players.PlayedEquipmentSound)
+                    {
+                        if (age > 4500)
+                            Fail($"equipment effects missing. Received={string.Join(',', visible)} Sound={players.PlayedEquipmentSound}");
+                        break;
+                    }
+                    report("COOP_QA EQUIPMENT Heal=True Explosion=True Smoke=True Sound=True");
+                    return true;
+                }
+                var (item, kind) = EquipmentFixtures[fixture];
+                var isActive = kind != EquipmentKind.Projectile;
+                if (stage % 2 == 1)
+                {
+                    if (!fixtureEquipped)
+                    {
+                        fixtureEquipped = Equip(hero, item, isActive);
+                        stageStarted = Stopwatch.GetTimestamp();
+                        break;
+                    }
+                    if (age < 450)
+                        break;
+                    Press(EquippedKey(hero, item, isActive), 420);
+                    Advance();
+                }
+                else if (age >= 1600 && players.Equipment.Captured.Contains(kind) && players.Equipment.Rendered.Contains(kind))
+                {
+                    report($"COOP_QA EQUIPMENT Item={item} Kind={kind} Captured=True Rendered=True");
+                    fixtureEquipped = false;
+                    Advance();
+                }
+                else if (kind == EquipmentKind.Projectile && projectileShots < 2 &&
+                         age >= 1100 * (projectileShots + 1))
+                {
+                    projectileShots++;
+                    hero.dir = -hero.dir;
+                    Press(EquippedKey(hero, item, false), 180);
+                }
+                else if (age > 6500)
+                    Fail($"{item} sprite missing. Sent={string.Join(',', players.Equipment.Captured)} Received={string.Join(',', players.Equipment.Rendered)}");
+                break;
         }
         return false;
     }
+
+    private bool Equip(Hero hero, string item, bool active = false)
+    {
+        var id = item.AsHaxeString();
+        if (!active && hero.inventory.getEquippedWeaponOn(0)?.getItemKind()?.ToString() == item)
+            return true;
+        if (dc.Data.Class.item.byId.get(id) is null)
+        {
+            Fail($"{item} is unavailable");
+            return false;
+        }
+        hero.inventory.removeAllEquipments();
+        var equipment = hero.inventory.add(new InventItem(active ? new InventItemKind.Active(id) : new InventItemKind.Weapon(id)));
+        if (!hero.inventory.equip(equipment))
+        {
+            Fail($"{item} could not be equipped");
+            return false;
+        }
+        hero.onEquipedItemsChange(Ref<bool>.Null, Ref<bool>.Null, Ref<bool>.Null);
+        report($"COOP_QA EQUIPPING Item={item} Key={EquippedKey(hero, item, active)}");
+        return true;
+    }
+
+    private static int EquippedKey(Hero hero, string item, bool active)
+    {
+        var inventory = hero.inventory;
+        var second = active ? inventory.getActiveOn(1) : inventory.getEquippedWeaponOn(1);
+        if (second?.getItemKind()?.ToString() == item)
+            return active ? LeftSkill : 50;
+        return active ? RightSkill : Attack;
+    }
+
+    private bool VerifyEffects(NativePlayerEffects effects, double age)
+    {
+        static bool HasActions(bool[] events) =>
+            HasLand(events) && events[(int)EffectKind.Dodge] && events[(int)EffectKind.Dash] && events[(int)EffectKind.Slash];
+        if (HasActions(effects.Captured) && HasActions(effects.Played) && effects.LastTrailGroup is { } group)
+        {
+            report($"COOP_QA EFFECTS Land=True Dodge=True Dash=True StarterSword={group}");
+            return true;
+        }
+        if (age > 4500)
+            Fail($"effects missing. Sent={string.Join(',', effects.Captured)} Received={string.Join(',', effects.Played)} Trail={effects.LastTrailGroup}");
+        return false;
+    }
+
+    private static bool HasLand(bool[] events) =>
+        events[(int)EffectKind.LandSmoke] || events[(int)EffectKind.LandDirt] || events[(int)EffectKind.LandHeavy];
 
     private void Advance()
     {

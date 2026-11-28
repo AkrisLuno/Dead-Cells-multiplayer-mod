@@ -48,7 +48,8 @@ internal sealed class RemoteMotion
             return before.Pose with
             {
                 X = before.Pose.X + (after.Pose.X - before.Pose.X) * blend,
-                Y = before.Pose.Y + (after.Pose.Y - before.Pose.Y) * blend
+                Y = before.Pose.Y + (after.Pose.Y - before.Pose.Y) * blend,
+                Opacity = before.Pose.Opacity + (after.Pose.Opacity - before.Pose.Opacity) * blend
             };
         }
 

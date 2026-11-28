@@ -12,8 +12,8 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class LanSession : IDisposable
 {
-    private const int ProtocolVersion = 7;
-    private const int MaximumFrameBytes = 256 * 1024;
+    private const int ProtocolVersion = 9;
+    private const int MaximumFrameBytes = 384 * 1024;
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
     private readonly CancellationTokenSource shutdown = new();
     private readonly Action<string> report;
@@ -283,13 +283,20 @@ internal sealed record PlayerState(string Level, double X, double Y, int Directi
 {
     public ulong Layout { get; init; }
     public string? SpriteGroup { get; init; }
+    public double Opacity { get; init; } = 1;
     public MovementSound[]? Sounds { get; init; }
+    public PlayerEffect[]? Effects { get; init; }
+    public EquipmentVisual[]? Equipment { get; init; }
 
     internal bool IsValid => Level?.Length is > 0 and <= 96 &&
                              Animation is "idle" or "run" or "jump" or "fall" &&
-                             (SpriteGroup is null || SpriteGroup.Length is > 0 and <= 80) &&
-                             (Sounds is null || Sounds.Length <= 4 &&
+                             (SpriteGroup is null || SpriteGroup.Length is > 0 and <= 80) && Opacity is >= 0 and <= 1 &&
+                             (Sounds is null || Sounds.Length <= MovementSound.MaxCues &&
                               Array.TrueForAll(Sounds, sound => sound is { IsValid: true })) &&
+                             (Effects is null || Effects.Length <= PlayerEffect.MaxCues &&
+                              Array.TrueForAll(Effects, effect => effect is { IsValid: true })) &&
+                             (Equipment is null || Equipment.Length <= EquipmentVisual.MaxObjects &&
+                              Array.TrueForAll(Equipment, visual => visual is { IsValid: true })) &&
                              double.IsFinite(X) && double.IsFinite(Y) &&
                              Math.Abs(X) <= 50000 && Math.Abs(Y) <= 50000 && Direction is -1 or 1;
 }

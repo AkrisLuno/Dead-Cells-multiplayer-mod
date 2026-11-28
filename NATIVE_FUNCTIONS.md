@@ -26,11 +26,23 @@
 - `Fx.landSmoke`
 - `Fx.landDirt`
 - `Fx.landHeavy`
+- `DodgeRoll.onStart`
+- `Fx.dodgeStart`
+- `Fx.driftDirtAndSmoke`
+- `Fx.dash`
 - `Fx.customMask`
 - `Fx.diveAttack`
 - `Weapon.dynOnFxFrame`
 - `Weapon.playReleaseSfx`
 - `Fx.playWeaponAnim`
+- `Fx.playWeaponAnimFromObject`
+- `Fx.playWeaponFx`
+- `OldSkill.playSfx`
+- `Fx.frontShield`, `Fx.shieldParryStart`, `Fx.frontShieldHit`
+- `Fx.healing`, `Fx.flaskHeal`, `Fx.damageAura`, `Fx.entityHorizontalTeleport`
+- `Grenade.fixedUpdate`, `Bullet.fixedUpdate`, `Active.fixedUpdate`, `SmokeBomb.finishCast`
+- `Fx.radiusExplosion`, `Fx.deflagration`, `Fx.oilDeflagration`, `Fx.frostExplosion`, `Fx.smokeBombGrenade`
+- Constructors for `Bullet`, `Grenade`, `Active`, `Pet`, `PetMob`, `Boomerang`, `Decoy` and `Homunculus`
 
 ## Shop reroll
 

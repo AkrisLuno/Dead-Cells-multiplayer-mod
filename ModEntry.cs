@@ -85,7 +85,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         loot.Install();
 #if COOP_QA
         var qaMode = Environment.GetEnvironmentVariable("DEAD_CELLS_COOP_QA");
-        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal")
+        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal" or "effects" or "equipment")
         {
             options.masterVolume = 0;
             options.applyVolumes();
@@ -140,7 +140,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
             remote = null;
         }
         reportedLayoutMismatch = layoutMismatch;
-        players.Update(hero, remote?.Player, snapshot?.At ?? 0);
+        players.Update(hero, remote?.Player, snapshot?.At ?? 0, peerId);
         if (snapshot is not { IsFresh: true })
             remote = null;
         exits.Update(hero, remote);

@@ -18,7 +18,7 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<string> report)
 {
-    private readonly NormalPlayQa? normal = mode == "normal" ? new NormalPlayQa(report) : null;
+    private readonly NormalPlayQa? normal = mode is "normal" or "effects" or "equipment" ? new NormalPlayQa(report, mode) : null;
     private static readonly string[] TestWeaponIds = ["RustySword", "TwinDaggers", "BloodSword", "Bow", "WoodShield",
         "BroadSword", "Torch", "IceBow", "Shovel", "Rapier", "BalancedBlade", "AssassinDagger"];
     private PlayerState? beginning;
@@ -311,6 +311,8 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (calledStepAt == 0 || Stopwatch.GetElapsedTime(calledStepAt).TotalSeconds < 0.8)
             return;
         var presentationSounds = players.RemoteSounds - heardBeforeStep;
+        if (presentationSounds == 0 && Stopwatch.GetElapsedTime(calledStepAt).TotalSeconds < 4)
+            return;
         if (presentationSounds != 1 || !dc.Main.Class.ME.options.mute)
         {
             finished = true;

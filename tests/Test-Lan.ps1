@@ -10,11 +10,13 @@ param(
     [switch] $VerifyShop,
     [switch] $VerifyLoot,
     [switch] $VerifyPresentation,
-    [switch] $VerifyNormal
+    [switch] $VerifyNormal,
+    [switch] $VerifyEffects,
+    [switch] $VerifyEquipment
 )
 
 $ErrorActionPreference = 'Stop'
-if (@($VerifyExit, $VerifyShop, $VerifyLoot, $VerifyPresentation, $VerifyNormal).Where({ $_ }).Count -gt 1) {
+if (@($VerifyExit, $VerifyShop, $VerifyLoot, $VerifyPresentation, $VerifyNormal, $VerifyEffects, $VerifyEquipment).Where({ $_ }).Count -gt 1) {
     throw 'Choose one gameplay check per run.'
 }
 $root = (Resolve-Path -LiteralPath $InstanceRoot).Path
@@ -69,7 +71,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not acquire two Co-op Anything test slot
 
 try {
     if ($env:DOTNET_ROOT) { $env:Path = "$env:DOTNET_ROOT;$env:Path" }
-    $env:DEAD_CELLS_COOP_QA = if ($VerifyNormal) {
+    $env:DEAD_CELLS_COOP_QA = if ($VerifyEquipment) {
+        'equipment'
+    } elseif ($VerifyEffects) {
+        'effects'
+    } elseif ($VerifyNormal) {
         'normal'
     } elseif ($VerifyPresentation) {
         'presentation'
@@ -134,6 +140,21 @@ try {
     if ($VerifyNormal) {
         foreach ($side in 'Host', 'Client') {
             (Wait-ForGameLog $instances[$side] 'COOP_QA NORMAL resumed. Partner jump, dodge and movement sound observed.' $deadline).Line
+        }
+    }
+    if ($VerifyEffects -or $VerifyEquipment) {
+        $pattern = 'COOP_QA EFFECTS Land=True Dodge=True Dash=True StarterSword=\S+'
+        foreach ($side in 'Host', 'Client') {
+            (Wait-ForGameLog $instances[$side] $pattern $deadline).Line
+        }
+    }
+    if ($VerifyEquipment) {
+        foreach ($side in 'Host', 'Client') {
+            foreach ($item in 'StartBow', 'ExplosiveGrenade', 'HorizontalTurret', 'Owl') {
+                (Wait-ForGameLog $instances[$side] "COOP_QA EQUIPMENT Item=$item Kind=\w+ Captured=True Rendered=True" $deadline).Line
+            }
+            (Wait-ForGameLog $instances[$side] 'COOP_QA EQUIPMENT ShieldParry=True' $deadline).Line
+            (Wait-ForGameLog $instances[$side] 'COOP_QA EQUIPMENT Heal=True Explosion=True Smoke=True Sound=True' $deadline).Line
         }
     }
     $hostResult.Line

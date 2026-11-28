@@ -12,7 +12,9 @@ internal sealed class NativePlayers
 {
     private readonly Action<string> log;
     private readonly RemoteMotion motion = new();
-    private readonly NativeMovementAudio audio = new();
+    private readonly NativeEquipmentVisuals equipment = new();
+    private readonly NativeMovementAudio audio;
+    private readonly NativePlayerEffects effects;
     private KingSkin? replica;
     private Level? replicaLevel;
     private string? previousAnimation;
@@ -20,10 +22,13 @@ internal sealed class NativePlayers
     private const int PartnerOutline = 0x62D9FF;
     private LevelMap? lastMap;
     private ulong layout;
+    private Guid remoteId;
 
     internal NativePlayers(Action<string> log)
     {
         this.log = log;
+        audio = new NativeMovementAudio(equipment);
+        effects = new NativePlayerEffects(equipment);
         Hook_KingSkin.fixedUpdate += SkipReplicaSimulation;
         Hook_Level.fillCircularCollisionEntitiesBuffer += ExcludeReplicaFromCollision;
     }
@@ -39,7 +44,8 @@ internal sealed class NativePlayers
         var group = sprite.groupName?.ToString();
         return new PlayerState(level, sprite.x, sprite.y, hero.dir < 0 ? -1 : 1, animation, map.seed)
         {
-            SpriteGroup = group is { Length: > 0 and <= 80 } ? group : null
+            SpriteGroup = group is { Length: > 0 and <= 80 } ? group : null,
+            Opacity = sprite.visible ? Math.Clamp(sprite.alpha, 0, 1) : 0
         };
     }
 
@@ -66,13 +72,24 @@ internal sealed class NativePlayers
                 AddLayoutValue(room.hei);
             }
         }
-        return state with { Layout = layout, Sounds = audio.Outgoing(hero._level) };
+        return state with
+        {
+            Layout = layout, Sounds = audio.Outgoing(hero._level), Effects = effects.Outgoing(hero._level),
+            Equipment = equipment.Capture(hero._level)
+        };
     }
 
     private void AddLayoutValue(int value) => layout = unchecked((layout ^ (uint)value) * 1099511628211UL);
 
-    internal void Update(Hero? hero, PlayerState? state, long receivedAt)
+    internal void Update(Hero? hero, PlayerState? state, long receivedAt, Guid peerId)
     {
+        if (peerId != Guid.Empty && peerId != remoteId)
+        {
+            remoteId = peerId;
+            RemoveReplica();
+            effects.ResetPlayback();
+            audio.ResetPlayback();
+        }
         var level = hero?._level;
         var now = Stopwatch.GetTimestamp();
         if (state is null || level?.map?.id?.ToString() != state.Level || level.map.seed != state.LevelSeed ||
@@ -116,8 +133,15 @@ internal sealed class NativePlayers
             }
         }
         replica.spriteUpdate();
-        if (Stopwatch.GetElapsedTime(receivedAt, now).TotalMilliseconds <= 350 && hero?.spr is { } listener)
-            audio.Play(level!, state, listener.x, listener.y);
+        if (replica.spr is { } sprite)
+            sprite.alpha = pose.Opacity;
+        equipment.Render(level!, pose.Equipment);
+        if (Stopwatch.GetElapsedTime(receivedAt, now).TotalMilliseconds <= 350)
+        {
+            effects.Play(level!, replica, pose);
+            if (hero?.spr is { } listener)
+                audio.Play(level!, pose, listener.x, listener.y);
+        }
     }
 
 #if COOP_QA
@@ -131,6 +155,9 @@ internal sealed class NativePlayers
     internal string? ReplicaAnimation => replica?.spr?.groupName?.ToString();
     internal int RemoteSounds => audio.Played;
     internal string? LastRemoteSound => audio.LastAsset;
+    internal bool PlayedEquipmentSound => audio.PlayedEquipment;
+    internal NativePlayerEffects Effects => effects;
+    internal NativeEquipmentVisuals Equipment => equipment;
     internal (double Near, double Middle, bool FarSilent) ProbeSoundDistance(Hero hero, PlayerState state)
         => audio.ProbeDistance(hero._level, state);
 #endif
@@ -142,6 +169,7 @@ internal sealed class NativePlayers
         replica = null;
         replicaLevel = null;
         motion.Clear();
+        equipment.Clear();
     }
 
     private void SkipReplicaSimulation(Hook_KingSkin.orig_fixedUpdate original, KingSkin entity)

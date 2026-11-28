@@ -7,13 +7,14 @@ using dc.hxd.res;
 using dc.level;
 using dc.level._LevelAudio;
 using dc.pr;
+using dc.tool.skill;
 using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod;
 
 internal sealed class NativeMovementAudio
 {
-    private readonly Queue<(long At, MovementSound Cue)> pending = new(4);
+    private readonly Queue<(long At, MovementSound Cue)> pending = new(MovementSound.MaxCues);
     private MovementSound[]? outgoing;
     private Hero? capturing;
     private Level? level;
@@ -22,18 +23,39 @@ internal sealed class NativeMovementAudio
 #if COOP_QA
     internal int Played { get; private set; }
     internal int OutOfRange { get; private set; }
+    internal bool PlayedEquipment { get; private set; }
     internal string? LastAsset { get; private set; }
     internal double LastVolume { get; private set; }
     private MovementSound? lastCue;
 #endif
 
-    internal NativeMovementAudio()
+    internal NativeMovementAudio(NativeEquipmentVisuals equipment)
     {
         Hook_Hero.playStepSound += (original, hero) => Capture(hero, () => original(hero));
         Hook_Hero.playClimbSfx += (original, hero) => Capture(hero, () => original(hero));
         Hook_Hero.onLand += (original, hero, velocity) => Capture(hero, () => original(hero, velocity));
         Hook_Hero.landStun += (original, hero, velocity, forced) => Capture(hero, () => original(hero, velocity, forced));
         Hook_LevelAudio.playEvent += OnSound;
+        Hook_OldSkill.playSfx += (original, skill, sound, canPlay, force, volume, pitch, priority) =>
+        {
+            if (skill.owner is Hero hero)
+                Capture(hero, () => original(skill, sound, canPlay, force, volume, pitch, priority));
+            else
+                original(skill, sound, canPlay, force, volume, pitch, priority);
+        };
+        Hook_LevelAudio.playEventOn += (original, audio, sound, owner, volume, pitch, key) =>
+        {
+            if ((ReferenceEquals(owner, Game.Class.ME?.hero) || equipment.Owns(owner)) &&
+                owner?._level is { } current && owner.spr is { } sprite)
+                Record(current, audio, sound, sprite.x, sprite.y, volume, pitch);
+            return original(audio, sound, owner, volume, pitch, key);
+        };
+        Hook_LevelAudio.playEventAt += (original, audio, sound, x, y, volume, pitch, key) =>
+        {
+            if (capturing?._level is { } current)
+                Record(current, audio, sound, x, y, volume, pitch);
+            return original(audio, sound, x, y, volume, pitch, key);
+        };
     }
 
     private void Capture(Hero hero, Action original)
@@ -48,21 +70,24 @@ internal sealed class NativeMovementAudio
     private Event OnSound(Hook_LevelAudio.orig_playEvent original, LevelAudio audio, Sound sound,
         double? volume, double? pitch, dc.String? key)
     {
-        if (capturing is { _level: { } current, spr: { } sprite } && ReferenceEquals(audio, current.lAudio) &&
-            sound?.entry?.get_path()?.ToString() is { } path)
-        {
-            SetLevel(current);
-            var cue = new MovementSound(nextSequence + 1, path, sprite.x, sprite.y, volume);
-            if (cue.IsValid)
-            {
-                nextSequence++;
-                if (pending.Count == 4)
-                    pending.Dequeue();
-                pending.Enqueue((Stopwatch.GetTimestamp(), cue));
-                outgoing = pending.Select(sound => sound.Cue).ToArray();
-            }
-        }
-        return original(audio, sound!, volume, pitch, key);
+        if (capturing is { _level: { } current, spr: { } sprite })
+            Record(current, audio, sound, sprite.x, sprite.y, volume, pitch);
+        return original(audio, sound, volume, pitch, key);
+    }
+
+    private void Record(Level current, LevelAudio audio, Sound? sound, double x, double y, double? volume, double? pitch)
+    {
+        if (!ReferenceEquals(audio, current.lAudio) || sound?.entry?.get_path()?.ToString() is not { } path)
+            return;
+        var cue = new MovementSound(nextSequence + 1, path, x, y, volume, pitch);
+        if (!cue.IsValid)
+            return;
+        SetLevel(current);
+        nextSequence++;
+        if (pending.Count == MovementSound.MaxCues)
+            pending.Dequeue();
+        pending.Enqueue((Stopwatch.GetTimestamp(), cue));
+        outgoing = pending.Select(entry => entry.Cue).ToArray();
     }
 
     internal MovementSound[]? Outgoing(Level current)
@@ -78,6 +103,8 @@ internal sealed class NativeMovementAudio
             outgoing = pending.Count > 0 ? pending.Select(sound => sound.Cue).ToArray() : null;
         return outgoing;
     }
+
+    internal void ResetPlayback() => lastHeard = 0;
 
     internal void Play(Level current, PlayerState state, double listenerX, double listenerY)
     {
@@ -100,9 +127,10 @@ internal sealed class NativeMovementAudio
             var loader = dc.hxd.Res.Class.get_loader.Invoke();
             if (loader?.exists(path) != true)
                 continue;
-            var playback = audio.playEventAt(loader.load(path).toSound(), cue.X, cue.Y, volume, null, null);
+            var playback = audio.playEventAt(loader.load(path).toSound(), cue.X, cue.Y, volume, cue.Pitch, null);
 #if COOP_QA
             Played++;
+            PlayedEquipment |= MovementSound.IsEquipmentAsset(cue.Path);
             LastAsset = cue.Path;
             LastVolume = playback.volume;
             lastCue = cue;
