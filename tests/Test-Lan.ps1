@@ -16,11 +16,12 @@ param(
     [switch] $VerifySummons,
     [switch] $VerifyCombat,
     [switch] $VerifyRevive,
-    [switch] $VerifyEnemyTarget
+    [switch] $VerifyEnemyTarget,
+    [switch] $VerifyBoss
 )
 
 $ErrorActionPreference = 'Stop'
-if (@($VerifyExit, $VerifyShop, $VerifyLoot, $VerifyPresentation, $VerifyNormal, $VerifyEffects, $VerifyEquipment, $VerifySummons, $VerifyCombat, $VerifyRevive, $VerifyEnemyTarget).Where({ $_ }).Count -gt 1) {
+if (@($VerifyExit, $VerifyShop, $VerifyLoot, $VerifyPresentation, $VerifyNormal, $VerifyEffects, $VerifyEquipment, $VerifySummons, $VerifyCombat, $VerifyRevive, $VerifyEnemyTarget, $VerifyBoss).Where({ $_ }).Count -gt 1) {
     throw 'Choose one gameplay check per run.'
 }
 $root = (Resolve-Path -LiteralPath $InstanceRoot).Path
@@ -75,7 +76,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not acquire two Co-op Anything test slot
 
 try {
     if ($env:DOTNET_ROOT) { $env:Path = "$env:DOTNET_ROOT;$env:Path" }
-    $env:DEAD_CELLS_COOP_QA = if ($VerifyEnemyTarget) {
+    $env:DEAD_CELLS_COOP_QA = if ($VerifyBoss) {
+        'boss'
+    } elseif ($VerifyEnemyTarget) {
         'enemy-target'
     } elseif ($VerifyRevive) {
         'revive'
@@ -194,6 +197,13 @@ try {
     if ($VerifyEnemyTarget) {
         (Wait-ForGameLog $instances.Host 'COOP_QA ENEMY_TARGET HostTarget=True StrikeAcknowledged=True' $deadline).Line
         (Wait-ForGameLog $instances.Client 'COOP_QA ENEMY_TARGET ClientHealthBefore=\d+ After=\d+' $deadline).Line
+    }
+    if ($VerifyBoss) {
+        foreach ($side in 'Host', 'Client') {
+            foreach ($event in 'Ready=True Life=\d+', 'ClientHit=True Life=\d+', 'Phase=[1-9]\d*', 'Defeated=True GateUnlocked=True') {
+                (Wait-ForGameLog $instances[$side] "COOP_QA BOSS $event" $deadline).Line
+            }
+        }
     }
     $hostResult.Line
     $clientResult.Line

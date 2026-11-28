@@ -16,12 +16,13 @@ internal sealed record EnemyImpact(int Revision, int Damage, int Direction, bool
 }
 
 internal sealed record EnemyState(EnemyKey Key, double X, double Y, int Direction, int Life, int MaxLife,
-    string? Animation, int Frame, int DamageTier, int LifeTier, bool Removed, EnemyImpact? Impact)
+    string? Animation, int Frame, int DamageTier, int LifeTier, bool Removed, EnemyImpact? Impact, BossProgress? Boss = null)
 {
     internal bool IsValid => Key is { IsValid: true } && Math.Abs(X) <= 50000 && Math.Abs(Y) <= 50000 &&
         Direction is -1 or 1 && MaxLife is > 0 and <= EnemyImpact.MaxDamage && Life >= 0 && Life <= MaxLife &&
         (Animation is null || ValidName(Animation)) && Frame is >= 0 and <= 1024 &&
-        DamageTier is >= 0 and <= 256 && LifeTier is >= 0 and <= 256 && Impact is not { IsValid: false };
+        DamageTier is >= 0 and <= 256 && LifeTier is >= 0 and <= 256 && Impact is not { IsValid: false } &&
+        (Boss is null || Boss.Phase is >= 0 and <= 128 && (!Boss.Defeated || Life == 0 && !Removed));
 
     internal static bool ValidName(string? name)
     {
@@ -33,6 +34,8 @@ internal sealed record EnemyState(EnemyKey Key, double X, double Y, int Directio
         return true;
     }
 }
+
+internal sealed record BossProgress(int Phase, bool EncounterStarted, bool Defeated);
 
 internal sealed record EnemyStrike(int Sequence, EnemyKey Attacker, double Power, int DamageType, double X, double Y)
 {

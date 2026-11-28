@@ -25,6 +25,7 @@ internal sealed class NativeEnemies
         internal EnemyImpact? Impact { get; set; }
         internal int AppliedImpact { get; set; }
         internal bool WasHostile { get; set; }
+        internal bool AppliedBossDefeat { get; set; }
     }
 
     private sealed class Roster
@@ -58,6 +59,7 @@ internal sealed class NativeEnemies
     private int acknowledged;
     private int directionOverride;
     private bool spawningReplica;
+    private bool applyingBossDefeat;
     private int nextStrike;
     private int receivedStrike;
 
@@ -79,13 +81,18 @@ internal sealed class NativeEnemies
         Hook__Mob.__constructor__ += (original, mob, source, x, y, kind, damageTier, lifeTier) =>
         {
             original(mob, source, x, y, kind, damageTier, lifeTier);
-            if (inRun() && !spawningReplica && mob is not Boss && kind?.ToString() is { } name)
+            if (inRun() && !spawningReplica && kind?.ToString() is { } name)
                 Register(source, mob, name, x, y, damageTier, lifeTier);
         };
         Hook_Mob.canUpdate += (original, mob) => !IsReplica(mob) && original(mob);
         Hook_Entity.canUpdate += (original, entity) =>
             (entity is not Mob mob || !IsReplica(mob)) && original(entity);
         Hook_Entity.applyAttackResult += OnAttack;
+        Hook_Entity.kill += (original, entity) =>
+        {
+            if (applyingBossDefeat || entity is not Mob mob || !IsReplica(mob))
+                original(entity);
+        };
         Hook_Entity.canReceiveAttack += (original, entity, attack) =>
             !ReferenceEquals(entity, players.Partner) ? original(entity, attack) :
             host && entity._targetable && attack.source is Mob mob && IsEnemy(mob);
@@ -98,7 +105,7 @@ internal sealed class NativeEnemies
         };
     }
 
-    private static bool IsEnemy(Mob mob) => mob is not Boss && mob._level is { } source &&
+    private static bool IsEnemy(Mob mob) => mob._level is { } source &&
         mob._team is not null && ReferenceEquals(mob._team, source.teamMob);
 
     private bool IsReplica(Mob mob) => !host && inRun() && IsEnemy(mob);
@@ -299,6 +306,8 @@ internal sealed class NativeEnemies
             attack.lastHitTarget = mob;
             attack.finalDmg = hit.Damage;
             attack.hitResult = hit.Critical ? new HitResult.Critical() : new HitResult.Normal();
+            if (mob is Boss && !mob.canReceiveAttack(attack))
+                continue;
             directionOverride = hit.Direction;
             try { mob.applyAttackResult(attack); }
             finally { directionOverride = 0; }
@@ -330,7 +339,7 @@ internal sealed class NativeEnemies
                 if (!IsEnemy(enemy.Mob))
                 {
                     if (enemy.Pose is { } previous)
-                        poses.Add(previous with { Life = 0, Removed = true });
+                        poses.Add(previous with { Life = 0, Removed = true, Boss = null });
                     continue;
                 }
                 enemy.WasHostile = true;
@@ -359,16 +368,18 @@ internal sealed class NativeEnemies
     private static EnemyState? ReadPose(Enemy enemy)
     {
         var mob = enemy.Mob;
+        var boss = mob is Boss nativeBoss ? new BossProgress(nativeBoss.bossLevel, nativeBoss.isReady(), nativeBoss.onDieDone) : null;
+        var removed = mob.destroyed && (boss is null ? mob.life > 0 : !boss.Defeated);
         if (mob.destroyed && enemy.Pose is { } previous)
-            return previous with { Life = 0, Removed = mob.life > 0, Impact = enemy.Impact };
+            return previous with { Life = 0, Removed = removed, Impact = enemy.Impact, Boss = boss };
         if (mob.maxLife <= 0)
             return null;
         var sprite = mob.spr;
         var animation = sprite?.groupName?.ToString();
-        return new EnemyState(enemy.Key, sprite?.x ?? (mob.cx + mob.xr) * 24, sprite?.y ?? (mob.cy + mob.yr) * 24,
-            mob.dir < 0 ? -1 : 1, mob.destroyed ? 0 : Math.Clamp(mob.life, 0, mob.maxLife), mob.maxLife,
+        return new EnemyState(enemy.Key, (mob.cx + mob.xr) * 24, (mob.cy + mob.yr) * 24,
+            mob.dir < 0 ? -1 : 1, mob.destroyed || boss?.Defeated == true ? 0 : Math.Clamp(mob.life, 0, mob.maxLife), mob.maxLife,
             EnemyState.ValidName(animation) ? animation : null, sprite?.frame ?? 0,
-            enemy.DamageTier, enemy.LifeTier, mob.destroyed && mob.life > 0, enemy.Impact);
+            enemy.DamageTier, enemy.LifeTier, removed, enemy.Impact, boss);
     }
 
     private Enemy? CreateReplica(Level current, Roster roster, EnemyState pose)
@@ -419,9 +430,6 @@ internal sealed class NativeEnemies
             }
             if (mob.maxLife != pose.MaxLife)
                 mob.maxLife = pose.MaxLife;
-            if (mob.life != pose.Life)
-                mob.life = pose.Life;
-
             if (pose.Impact is { } impact && impact.Revision > entry.AppliedImpact)
             {
                 entry.AppliedImpact = impact.Revision;
@@ -430,7 +438,30 @@ internal sealed class NativeEnemies
                 ConfirmedImpacts++;
 #endif
             }
-            if (pose.Life == 0)
+            if (pose.Boss is { } progress && mob is Boss boss)
+            {
+                if (progress.Phase != boss.bossLevel)
+                    boss.bossLevel = progress.Phase;
+                if (progress.EncounterStarted && !progress.Defeated && !boss.isReady())
+                    boss.setReady();
+                if (progress.Defeated)
+                {
+                    if (!entry.AppliedBossDefeat && !boss.onDieDone)
+                    {
+                        entry.AppliedBossDefeat = true;
+                        // The native boss death opens arena gates and advances boss-specific scripts.
+                        boss.life = Math.Max(1, boss.life);
+                        applyingBossDefeat = true;
+                        try { boss.kill(); }
+                        finally { applyingBossDefeat = false; }
+                    }
+                    continue;
+                }
+            }
+            if (mob.life != pose.Life)
+                mob.life = pose.Life;
+
+            if (pose.Life == 0 && (mob is not Boss || pose.Removed))
             {
                 if (!pose.Removed && mob.spr is not null)
                     current.fx.mobDeath(mob);

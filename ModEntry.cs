@@ -89,7 +89,10 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         revival = new NativeRevival(host, message => Logger.Information("{Revival}", message));
 #if COOP_QA
         var qaMode = Environment.GetEnvironmentVariable("DEAD_CELLS_COOP_QA");
-        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal" or "effects" or "equipment" or "summons" or "combat" or "revive" or "enemy-target")
+        if (qaMode == "boss")
+            Hook_Game.loadMainLevel += (original, game, transition, level, keepHero, seed) =>
+                original(game, transition, level?.ToString() == "PrisonStart" ? "Bridge".AsHaxeString() : level, keepHero, seed);
+        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal" or "effects" or "equipment" or "summons" or "combat" or "revive" or "enemy-target" or "boss")
         {
             options.masterVolume = 0;
             options.applyVolumes();

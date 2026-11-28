@@ -60,6 +60,11 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
     private int initialCombatLife;
     private bool zombieTargetedGuest;
     private bool testedNativeStrike;
+    private long lastBossHit;
+    private long bossPhaseSeenAt;
+    private int initialBossPhase;
+    private dc.en.inter.door.BossDoor? bossGate;
+    private bool bossFixtureGate;
     private long revivalStartedAt;
     private long reviveKeyAt;
     private long lastRevivePress;
@@ -155,6 +160,11 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (mode == "enemy-target")
         {
             TickEnemyTarget(hero!, local, remote, players, enemies);
+            return;
+        }
+        if (mode == "boss")
+        {
+            TickBoss(hero!, local, enemies);
             return;
         }
         if (mode == "revive")
@@ -372,6 +382,113 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
                 $" client=({remote.X / 24:F2},{remote.Y / 24:F2}) strike={enemies.GuestStrikes}" +
                 $" received={enemies.GuestStrikeReceipt} life={hero.life}/{initialCombatLife}" +
                 $" guestOnTeam={players.Partner?._team?.members?.length}.");
+        }
+    }
+
+    private void TickBoss(Hero hero, PlayerState local, NativeEnemies enemies)
+    {
+        if (local.Level != "Bridge")
+        {
+            finished = true;
+            report($"COOP_QA FAIL: the boss fixture expected Black Bridge, got {local.Level}.");
+            return;
+        }
+        if (combatStartedAt == 0)
+        {
+            combatStartedAt = Stopwatch.GetTimestamp();
+            hero.toggleFullInvincibility(true);
+        }
+        var state = enemies.ObservedWorld?.Enemies.FirstOrDefault(enemy => enemy.Key.Kind == "Behemoth");
+        if (state is not null && enemies.FindForQa(state.Key) is dc.en.mob.boss.Behemoth boss && state.Boss is { } progress)
+        {
+            if (combatStep == 0)
+            {
+                if (bossGate is null)
+                {
+                    var level = hero._level;
+                    if (level.entitiesByClass.get(dc.en.inter.door.BossDoor.Class.__clid) is ArrayObj gates)
+                        bossGate = Enumerable.Range(0, gates.length)
+                            .Select(index => gates.getDyn(index)).OfType<dc.en.inter.door.BossDoor>()
+                            .OrderByDescending(door => door.cx).FirstOrDefault();
+                    if (bossGate is null)
+                    {
+                        bossFixtureGate = true;
+                        bossGate = new dc.en.inter.door.BossDoor(level, boss.cx + 8, boss.cy, false);
+                        if (!bossGate.initDone)
+                            bossGate.init();
+                        bossGate.locked = true;
+                    }
+                }
+                if (host && !boss.isReady() && !hero._level.game.hasCinematic())
+                {
+                    boss.isAlwaysUpdated = true;
+                    boss.setReady();
+                }
+                if (boss.isReady() && progress.EncounterStarted && state.Life > 0 && bossGate is not null &&
+                    !hero._level.game.hasCinematic())
+                {
+                    report($"COOP_QA BOSS Ready=True Life={state.Life} FixtureGate={bossFixtureGate}");
+                    initialBossPhase = progress.Phase;
+                    combatStep = 1;
+                    lastBossHit = Stopwatch.GetTimestamp();
+                }
+            }
+            else if (combatStep == 1 && !host && !testedNativeStrike &&
+                     Stopwatch.GetElapsedTime(lastBossHit).TotalMilliseconds >= 600)
+            {
+                testedNativeStrike = true;
+                hero.setPosPixel(state.X - 60, state.Y);
+                hero.updatePositionXY();
+                hero.spriteUpdate();
+                DealQaHit(hero, boss, Math.Max(1, state.MaxLife / 5));
+                report($"COOP_QA BOSS sent guest attack from ({hero.cx},{hero.cy}).");
+            }
+            else if (combatStep == 1 && state.Impact is { Revision: >= 1 } && state.Life < state.MaxLife &&
+                     boss.life == state.Life)
+            {
+                report($"COOP_QA BOSS ClientHit=True Life={boss.life}");
+                combatStep = 2;
+                lastBossHit = Stopwatch.GetTimestamp();
+            }
+            else if (combatStep == 2 && progress.Phase > initialBossPhase && boss.bossLevel == progress.Phase)
+            {
+                report($"COOP_QA BOSS Phase={boss.bossLevel}");
+                combatStep = 3;
+                bossPhaseSeenAt = Stopwatch.GetTimestamp();
+            }
+            else if (combatStep == 3 && progress.Defeated && boss.life == 0 && boss.onDieDone &&
+                     bossGate is { locked: false })
+            {
+                report("COOP_QA BOSS Defeated=True GateUnlocked=True");
+                Complete(hero, local);
+                return;
+            }
+
+            if (host && combatStep == 2 && state.Life > state.MaxLife / 2 &&
+                Stopwatch.GetElapsedTime(lastBossHit).TotalMilliseconds >= 450)
+            {
+                lastBossHit = Stopwatch.GetTimestamp();
+                DealQaHit(hero, boss, Math.Max(1, state.MaxLife / 5));
+            }
+            else if (host && combatStep == 2 && state.Life <= state.MaxLife / 2 && boss.bossLevel == initialBossPhase &&
+                     Stopwatch.GetElapsedTime(lastBossHit).TotalSeconds >= 4)
+            {
+                boss.bossLevelUp();
+                report("COOP_QA BOSS advanced phase using the native boss method.");
+            }
+            else if (host && combatStep == 3 && boss.life > 0 && !progress.Defeated &&
+                     Stopwatch.GetElapsedTime(bossPhaseSeenAt).TotalMilliseconds >= 1200)
+            {
+                boss.kill();
+            }
+        }
+        if (Stopwatch.GetElapsedTime(combatStartedAt).TotalSeconds > 26)
+        {
+            finished = true;
+            report($"COOP_QA FAIL: boss step={combatStep} state={state} gateLocked={bossGate?.locked}" +
+                $" target={(state is null ? null : enemies.FindForQa(state.Key)?.aTarget?.GetType().Name)}" +
+                $" hero=({hero.cx},{hero.cy})" +
+                $" cinematic={hero._level.game.curCine?.GetType().Name}.");
         }
     }
 

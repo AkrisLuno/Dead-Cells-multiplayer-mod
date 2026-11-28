@@ -8,6 +8,7 @@
 - `Fx.hitLines`, `Fx.mobDeath`
 - `Entity.set_team`, `Entity.set_targetable`, `Entity.canReceiveAttack`, `Mob.setAttackTarget`
 - `AttackUtils.createFromMob`, `AttackUtils.hit`
+- `Boss.isReady`, `Boss.setReady`, `Boss.bossLevel`, `Boss.onDie`, `Entity.kill`
 
 ## Co-op revival
 

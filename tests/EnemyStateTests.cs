@@ -40,4 +40,17 @@ public sealed class EnemyStateTests
         Assert.True(new EnemySync(ReceivedStrike: 1).IsValidFor(receiverIsHost: true));
         Assert.False(new EnemySync(ReceivedStrike: 1).IsValidFor(receiverIsHost: false));
     }
+
+    [Fact]
+    public void BossDefeatIsDistinctFromAZeroHealthPhaseOrRemoval()
+    {
+        var boss = new EnemyState(new EnemyKey("Behemoth", 10, 20, 0), 240, 480, 1,
+            0, 100, "idle", 1, 1, 1, false, null, new BossProgress(2, true, false));
+        Assert.True(boss.IsValid);
+        var defeated = boss with { Boss = new BossProgress(2, true, true) };
+        Assert.True(defeated.IsValid);
+        Assert.False((defeated with { Life = 1 }).IsValid);
+        Assert.False((defeated with { Removed = true }).IsValid);
+        Assert.False((boss with { Boss = new BossProgress(129, true, false) }).IsValid);
+    }
 }
