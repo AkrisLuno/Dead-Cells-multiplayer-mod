@@ -9,7 +9,7 @@ async def forward(reader, writer):
     while True:
         header = await reader.readexactly(4)
         size = int.from_bytes(header, "big")
-        if not 0 < size <= 384 * 1024:
+        if not 0 < size <= 640 * 1024:
             return
         data = await reader.readexactly(size)
         await asyncio.sleep(next(delays))

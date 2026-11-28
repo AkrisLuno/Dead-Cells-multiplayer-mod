@@ -12,8 +12,8 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class LanSession : IDisposable
 {
-    private const int ProtocolVersion = 11;
-    private const int MaximumFrameBytes = 384 * 1024;
+    private const int ProtocolVersion = 12;
+    private const int MaximumFrameBytes = 640 * 1024;
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
     private readonly CancellationTokenSource shutdown = new();
     private readonly Action<string> report;
@@ -42,8 +42,9 @@ internal sealed class LanSession : IDisposable
 
     public void Publish(PlayerState? state, ExitDecision? exit = null, LobbyState? lobby = null,
         RerollRequest? reroll = null, ShopStock[]? shopStocks = null,
-        DropFrame? dropFrame = null, DropReceipt? dropReceipt = null)
-        => Volatile.Write(ref local, new PeerState(state, new PeerControls(exit, lobby, reroll, shopStocks, dropFrame, dropReceipt)));
+        DropFrame? dropFrame = null, DropReceipt? dropReceipt = null, EnemySync? enemies = null)
+        => Volatile.Write(ref local, new PeerState(state, new PeerControls(exit, lobby, reroll, shopStocks, dropFrame, dropReceipt),
+            enemies ?? EnemySync.Empty));
 
     public (int Seed, Guid PlayerId, ReceivedState? Snapshot) ObservePeer()
     {
@@ -192,20 +193,25 @@ internal sealed class LanSession : IDisposable
     {
         using var timer = new PeriodicTimer(TickInterval);
         PeerControls? sent = null;
+        EnemySync? sentEnemies = null;
         while (await timer.WaitForNextTickAsync(cancellation).ConfigureAwait(false))
         {
             var snapshot = Volatile.Read(ref local);
             var controls = snapshot?.Controls ?? PeerControls.Empty;
+            var enemies = snapshot?.Enemies ?? EnemySync.Empty;
             // TCP keeps these ordered, so the receiver can retain unchanged world state.
-            await SendAsync(stream, new WireState(snapshot?.Player, controls == sent ? null : controls), cancellation)
+            await SendAsync(stream, new WireState(snapshot?.Player, controls == sent ? null : controls,
+                    enemies == sentEnemies ? null : enemies), cancellation)
                 .ConfigureAwait(false);
             sent = controls;
+            sentEnemies = enemies;
         }
     }
 
     private async Task ReceiveChangesAsync(NetworkStream stream, Connection connected, CancellationToken cancellation)
     {
         PeerControls? controls = null;
+        var enemies = EnemySync.Empty;
         while (!cancellation.IsCancellationRequested)
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -230,9 +236,15 @@ internal sealed class LanSession : IDisposable
                     throw new InvalidDataException("Invalid peer snapshot.");
                 controls = changes;
             }
+            if (wire.Enemies is { } combat)
+            {
+                if (!combat.IsValidFor(IsHost))
+                    throw new InvalidDataException("Invalid enemy update.");
+                enemies = combat;
+            }
             if (controls is null)
                 throw new InvalidDataException("Initial peer snapshot has no world state.");
-            connected.Latest = new ReceivedState(new PeerState(wire.Player, controls), Stopwatch.GetTimestamp());
+            connected.Latest = new ReceivedState(new PeerState(wire.Player, controls, enemies), Stopwatch.GetTimestamp());
         }
     }
 
@@ -276,7 +288,7 @@ internal sealed class LanSession : IDisposable
 
     private readonly record struct Hello(int Version, int Seed, Guid PlayerId);
     private sealed record HostIdentity(int Seed, Guid Id);
-    private sealed record WireState(PlayerState? Player, PeerControls? Controls);
+    private sealed record WireState(PlayerState? Player, PeerControls? Controls, EnemySync? Enemies);
 }
 
 internal sealed record PlayerState(string Level, double X, double Y, int Direction, string Animation, int LevelSeed = 0)
@@ -306,7 +318,7 @@ internal sealed record ReceivedState(PeerState State, long At)
     internal bool IsFresh => Stopwatch.GetElapsedTime(At).TotalMilliseconds <= 800;
 }
 
-internal sealed record PeerState(PlayerState? Player, PeerControls Controls)
+internal sealed record PeerState(PlayerState? Player, PeerControls Controls, EnemySync Enemies)
 {
     internal ExitDecision? Exit => Controls.Exit;
     internal LobbyState? Lobby => Controls.Lobby;

@@ -20,6 +20,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
     private NativeExits? exits;
     private NativeShops? shops;
     private NativeLoot? loot;
+    private NativeEnemies? enemies;
     private IPEndPoint? endpoint;
     private bool host;
     private int runSeed;
@@ -83,9 +84,10 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         shops.Install();
         loot = new NativeLoot(host, () => runSeed != 0, message => Logger.Warning("{DropState}", message));
         loot.Install();
+        enemies = new NativeEnemies(host, () => runSeed != 0, players);
 #if COOP_QA
         var qaMode = Environment.GetEnvironmentVariable("DEAD_CELLS_COOP_QA");
-        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal" or "effects" or "equipment" or "summons")
+        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal" or "effects" or "equipment" or "summons" or "combat")
         {
             options.masterVolume = 0;
             options.applyVolumes();
@@ -102,7 +104,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         if (qa?.CheckForShutdown() == true)
             return;
 #endif
-        if (session is null || players is null || exits is null || shops is null || loot is null)
+        if (session is null || players is null || exits is null || shops is null || loot is null || enemies is null)
             return;
 
         var (seed, peerId, snapshot) = session.ObservePeer();
@@ -146,15 +148,16 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         exits.Update(hero, remote);
         shops.Update(hero, remote);
         loot.Update(hero, player, remote);
+        var combat = enemies.Update(hero, player, remote);
         var receipt = loot.Receipt;
 #if COOP_QA
         if (qa is not null)
             receipt = qa.OutgoingReceipt(receipt);
 #endif
         session.Publish(player, exits.Decision, new LobbyState(ready, host && launchRequested),
-            shops.Request, shops.Stocks, loot.Frame, receipt);
+            shops.Request, shops.Stocks, loot.Frame, receipt, combat);
 #if COOP_QA
-        qa?.Tick(hero, remote?.Player, players, loot);
+        qa?.Tick(hero, remote?.Player, players, loot, enemies);
 #endif
     }
 

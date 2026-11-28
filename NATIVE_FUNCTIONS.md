@@ -1,5 +1,12 @@
 # Native function names
 
+## Enemy combat
+
+- `Mob` constructor, `Mob.create`, `Mob.canUpdate`, `Entity.canUpdate`
+- `Entity.applyAttackResult`, `Mob.applyAttackResult`, `AttackData.init`, `AttackData.getHitX`
+- `Entity.setPosPixel`, `Entity.updatePositionXY`, `Entity.spriteUpdate`, `Mob.destroy`
+- `Fx.hitLines`, `Fx.mobDeath`
+
 ## Mob loot
 
 - `Mob.dropLoot`

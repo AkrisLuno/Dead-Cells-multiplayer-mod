@@ -14,6 +14,7 @@
     <Compile Include="../MovementSound.cs" Link="MovementSound.cs" />
     <Compile Include="../PlayerEffect.cs" Link="PlayerEffect.cs" />
     <Compile Include="../EquipmentVisual.cs" Link="EquipmentVisual.cs" />
+    <Compile Include="../EnemyState.cs" Link="EnemyState.cs" />
     <Compile Include="../RemoteMotion.cs" Link="RemoteMotion.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />

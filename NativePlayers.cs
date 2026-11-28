@@ -33,6 +33,9 @@ internal sealed class NativePlayers
         Hook_Level.fillCircularCollisionEntitiesBuffer += ExcludeReplicaFromCollision;
     }
 
+    internal dc.Entity? Partner => replica is { destroyed: false } ? replica : null;
+    internal bool OwnsEquipment(dc.Entity? entity) => equipment.Owns(entity);
+
     internal static PlayerState? Capture(Hero? hero)
     {
         if (hero is null || hero.destroyed || hero.spr is not { } sprite ||

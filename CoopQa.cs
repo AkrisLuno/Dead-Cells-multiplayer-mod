@@ -8,9 +8,11 @@ using System.Text.Json;
 using dc.en;
 using dc.en.inter;
 using dc.en.loot;
+using dc.en.mob;
 using dc.hl.types;
 using dc.level;
 using dc.tool;
+using dc.tool.atk;
 using HaxeProxy.Runtime;
 using ModCore.Utilities;
 
@@ -50,6 +52,10 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
     private long presentationReadyAt;
     private long calledStepAt;
     private int heardBeforeStep;
+    private long combatStartedAt;
+    private long clientHitSeenAt;
+    private int combatStep;
+    private EnemyKey? combatKey;
 
     internal bool CheckForShutdown()
     {
@@ -90,7 +96,7 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         return Stopwatch.GetElapsedTime(receiptAt).TotalMilliseconds >= 500 ? receipt : null;
     }
 
-    internal void Tick(Hero? hero, PlayerState? remote, NativePlayers players, NativeLoot loot)
+    internal void Tick(Hero? hero, PlayerState? remote, NativePlayers players, NativeLoot loot, NativeEnemies enemies)
     {
         if (NativePlayers.Capture(hero) is not { } local)
             return;
@@ -123,6 +129,11 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (mode == "presentation")
         {
             TickPresentation(hero!, local, remote, players);
+            return;
+        }
+        if (mode == "combat")
+        {
+            TickCombat(hero!, local, remote, enemies);
             return;
         }
 
@@ -204,6 +215,97 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         hero.setPosCase(exitX, exitY, 0.5, 0.9);
         report($"COOP_QA activating exit ({exitX},{exitY}) to {door.destLevel}.");
         door.onActivate(hero, true);
+    }
+
+    private void TickCombat(Hero hero, PlayerState local, PlayerState remote, NativeEnemies enemies)
+    {
+        if (combatStartedAt == 0)
+        {
+            if (hero.controlsLocked(Ref<bool>.Null) || Math.Abs(local.X - remote.X) > 96)
+                return;
+            combatStartedAt = Stopwatch.GetTimestamp();
+            if (host)
+            {
+                var level = hero._level;
+                var x = Math.Clamp(hero.cx + 3, 4, level.map.wid - 5);
+                var y = Math.Clamp(hero.cy - 1, 2, level.map.hei - 2);
+                var zombie = new Zombie(level, x, y, 1, 1);
+                zombie.init();
+                zombie.life = zombie.maxLife = 100;
+            }
+        }
+        var frame = enemies.ObservedWorld;
+        var state = frame?.Enemies.FirstOrDefault(enemy => combatKey is null
+            ? enemy.Key.Kind == "Zombie" && enemy.MaxLife == 100
+            : enemy.Key == combatKey);
+        if (state is not null)
+        {
+            combatKey = state.Key;
+            var mob = enemies.FindForQa(state.Key);
+            switch (combatStep)
+            {
+                case 0 when state.Life == 100 && mob is { destroyed: false, life: 100 }:
+                    if (!host)
+                    {
+                        var dx = (mob.cx + mob.xr) * 24 - state.X;
+                        var dy = (mob.cy + mob.yr) * 24 - state.Y;
+                        if (dx * dx + dy * dy > 24 * 24)
+                            return;
+                        DealQaHit(hero, mob, 30);
+                        if (mob.life != 100)
+                        {
+                            finished = true;
+                            report("COOP_QA FAIL: client changed enemy health before the host confirmed the hit.");
+                            return;
+                        }
+                    }
+                    report("COOP_QA COMBAT Spawn=True Life=100");
+                    combatStep++;
+                    break;
+                case 1 when state.Life == 70 && state.Impact is { Revision: 1, Damage: 30 } &&
+                                 mob is { destroyed: false, life: 70 }:
+                    report("COOP_QA COMBAT ClientHit=30 Life=70");
+                    clientHitSeenAt = Stopwatch.GetTimestamp();
+                    combatStep++;
+                    break;
+                case 2 when host && Stopwatch.GetElapsedTime(clientHitSeenAt).TotalMilliseconds > 600 &&
+                                 mob is { destroyed: false, life: 70 }:
+                    DealQaHit(hero, mob, 20);
+                    combatStep++;
+                    break;
+                case 2 or 3 when state.Life == 50 && state.Impact is { Revision: 2, Damage: 20 } &&
+                                      mob is { destroyed: false, life: 50 }:
+                    report("COOP_QA COMBAT HostHit=20 Life=50");
+                    if (!host)
+                        DealQaHit(hero, mob, 80);
+                    combatStep = 4;
+                    break;
+                case 4 when state is { Life: 0, Removed: false, Impact.Revision: 3 } &&
+                                 mob is { destroyed: true }:
+                    if (host || enemies is { ConfirmedImpacts: 3, MirroredDeaths: 1 })
+                    {
+                        report("COOP_QA COMBAT Death=True FinalLife=0 Impacts=3");
+                        Complete(hero, local);
+                        return;
+                    }
+                    break;
+            }
+        }
+        if (Stopwatch.GetElapsedTime(combatStartedAt).TotalSeconds > 14)
+        {
+            finished = true;
+            report($"COOP_QA FAIL: combat step={combatStep} state={state} mobs={frame?.Enemies.Length}" +
+                $" ack={frame?.Acknowledged} impacts={enemies.ConfirmedImpacts} deaths={enemies.MirroredDeaths}.");
+        }
+    }
+
+    private static void DealQaHit(Hero hero, dc.en.Mob mob, int damage)
+    {
+        var attack = new AttackData().init(hero, (double)damage);
+        attack.lastHitTarget = mob;
+        attack.finalDmg = damage;
+        attack.hitResult = new dc.HitResult.Normal();
+        mob.applyAttackResult(attack);
     }
 
     private void Complete(Hero hero, PlayerState local)
