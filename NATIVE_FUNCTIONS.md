@@ -47,6 +47,7 @@
 - `Owl.init`, `Owl.onBuff`, `Owl.onDebuff`, `Owl.depop`
 - `FlyingSword.init`, `FlyingSword.onBuff`, `FlyingSword.onDebuff`, `FlyingSword.hitCurrentTarget`, `FlyingSword.depop`
 - `PetMob.depop`, `S_ProtectorMushroom.mushExplose`, `Fx.bloodHit`, `Fx.hitLines`
+- `GiantWhistle.onCooldownEnd`, `GiantWhistle.shoryuken`, `Fx.giantShoryuken`, `Fx.groundStones`
 
 ## Shop reroll
 

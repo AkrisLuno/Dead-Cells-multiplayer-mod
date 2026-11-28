@@ -61,6 +61,10 @@ internal sealed class NativePlayerEffects
         };
         dc.pow.Hook_SmokeBomb.finishCast += (original, skill) =>
             CaptureEquipment(skill.owner as Hero, () => original(skill));
+        dc.pow.Hook_GiantWhistle.onCooldownEnd += (original, skill, key, subIndex) =>
+            CaptureEquipment(skill.owner as Hero, () => original(skill, key, subIndex));
+        dc.pow.Hook_GiantWhistle.shoryuken += (original, skill, target) =>
+            CaptureEquipment(skill.owner as Hero, () => original(skill, target));
         InstallCompanionHooks(equipment, audio);
 
         Hook_Fx.landSmoke += (original, fx, x, y, count) =>
@@ -185,6 +189,17 @@ internal sealed class NativePlayerEffects
             if (owner.spr is { } sprite)
                 Record(owner as Hero, fx, new(0, EffectKind.Teleport, fromX - sprite.x, fromY - sprite.y,
                     Color: color, Scale: toX - sprite.x, Extra: toY - sprite.y));
+        };
+        Hook_Fx.giantShoryuken += (original, fx, x, y, duration, target, flip) =>
+        {
+            var flipped = !flip.IsNull && flip.value;
+            original(fx, x, y, duration, target, flip);
+            Record(equipmentOwner, fx, new(0, EffectKind.GiantFist, x, y, flipped ? 1 : 0, Scale: duration));
+        };
+        Hook_Fx.groundStones += (original, fx, x, y, color, power) =>
+        {
+            original(fx, x, y, color, power);
+            Record(equipmentOwner, fx, new(0, EffectKind.GiantStones, x, y, Color: color, Scale: power ?? 0));
         };
     }
 
@@ -406,6 +421,13 @@ internal sealed class NativePlayerEffects
                     break;
                 case EffectKind.CompanionHit:
                     fx.hitLines(cue.X, cue.Y, cue.Variant, cue.Color ?? 0xFFD784, null, Ref<int>.Null, Ref<int>.Null);
+                    break;
+                case EffectKind.GiantFist:
+                    var flipped = cue.Variant == 1;
+                    fx.giantShoryuken(cue.X, cue.Y, cue.Scale, replica, Ref<bool>.From(ref flipped));
+                    break;
+                case EffectKind.GiantStones:
+                    fx.groundStones(cue.X, cue.Y, cue.Color, cue.Scale == 0 ? null : cue.Scale);
                     break;
                 case EffectKind.Smoke:
                     fx.smokeBombGrenade(cue.X, cue.Y, cue.Scale, cue.Color ?? 0xFFFFFF);

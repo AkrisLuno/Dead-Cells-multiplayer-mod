@@ -7,7 +7,7 @@ internal enum EffectKind
 {
     LandSmoke, LandDirt, LandHeavy, Dive, Dodge, Dash, Slash,
     ShieldGuard, ShieldParry, ShieldHit, Heal, Explosion, Frost, Smoke, Aura, Teleport, Deflagration, OilBurst,
-    CompanionFlash, CompanionDirt, CompanionHit
+    CompanionFlash, CompanionDirt, CompanionHit, GiantFist, GiantStones
 }
 
 internal sealed record PlayerEffect(int Sequence, EffectKind Kind, double X, double Y,
@@ -43,6 +43,8 @@ internal sealed record PlayerEffect(int Sequence, EffectKind Kind, double X, dou
                                  EffectKind.CompanionFlash => true,
                                  EffectKind.CompanionDirt => Scale is > 0 and <= 160 && Variant is -1 or 0 or 1,
                                  EffectKind.CompanionHit => Variant is -1 or 1,
+                                 EffectKind.GiantFist => Variant is 0 or 1 && Scale is > 0 and <= 4,
+                                 EffectKind.GiantStones => Scale is >= 0 and <= 8,
                                  _ => false
                              }) && (Kind == EffectKind.Slash || Trail is null);
 }

@@ -364,13 +364,33 @@ internal sealed class NormalPlayQa(Action<string> report, string mode)
                 if (equipment.CompanionRemovals >= 3 && effects.Played[(int)EffectKind.Deflagration])
                 {
                     report("COOP_QA SUMMON Mushroom Arrived=True Explosion=True Removed=True");
+                    if (Equip(hero, "GiantWhistle", active: true))
+                        Advance();
+                }
+                break;
+            case 11:
+                if (age >= 500)
+                {
+                    var level = hero._level;
+                    var x = Math.Clamp(hero.cx + hero.dir * 3, 4, level.map.wid - 5);
+                    var y = Math.Clamp(level.map.getGroundY(x, hero.cy) - 1, 2, level.map.hei - 2);
+                    new Zombie(level, x, y, 1, 1).init();
+                    Press(EquippedKey(hero, "GiantWhistle", active: true), 420);
+                    Advance();
+                }
+                break;
+            case 12:
+                if (effects.Captured[(int)EffectKind.GiantFist] && effects.Played[(int)EffectKind.GiantFist])
+                {
+                    report("COOP_QA SUMMON GiantWhistle Fist=True");
                     return true;
                 }
                 break;
         }
         if (stage > 0 && age > 8000 && Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds > 8000)
             Fail($"summons step {stage}, arrivals={equipment.CompanionArrivals}, removals={equipment.CompanionRemovals}," +
-                $" trails={equipment.CompanionTrails}, frost={effects.CompanionFrostEffects}, owl audio={players.PlayedOwlSummon}");
+                $" trails={equipment.CompanionTrails}, frost={effects.CompanionFrostEffects}, owl audio={players.PlayedOwlSummon}," +
+                $" fist sent={effects.Captured[(int)EffectKind.GiantFist]} received={effects.Played[(int)EffectKind.GiantFist]}");
         return false;
     }
 

@@ -165,6 +165,7 @@ try {
             (Wait-ForGameLog $instances[$side] 'COOP_QA SUMMON Owl Arrived=True Audio=True Frost=True Removed=True' $deadline).Line
             (Wait-ForGameLog $instances[$side] 'COOP_QA SUMMON FlyingSword Arrived=True Trail=True Frost=True Removed=True' $deadline).Line
             (Wait-ForGameLog $instances[$side] 'COOP_QA SUMMON Mushroom Arrived=True Explosion=True Removed=True' $deadline).Line
+            (Wait-ForGameLog $instances[$side] 'COOP_QA SUMMON GiantWhistle Fist=True' $deadline).Line
         }
     }
     $hostResult.Line
