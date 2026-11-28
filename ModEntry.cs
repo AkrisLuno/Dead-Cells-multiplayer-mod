@@ -26,6 +26,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
     private bool launchRequested;
     private bool ready;
     private int readyForSeed;
+    private Guid readyForHost;
     private string? lobbyError;
     private TitleScreen? lobbyMenu;
     private bool reportedLayoutMismatch;
@@ -84,7 +85,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         loot.Install();
 #if COOP_QA
         var qaMode = Environment.GetEnvironmentVariable("DEAD_CELLS_COOP_QA");
-        if (qaMode is "1" or "exit" or "shop" or "loot")
+        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal")
         {
             options.masterVolume = 0;
             options.applyVolumes();
@@ -104,22 +105,21 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         if (session is null || players is null || exits is null || shops is null || loot is null)
             return;
 
-        var seed = session.RunSeed;
-        var incoming = session.Remote;
+        var (seed, peerId, snapshot) = session.ObservePeer();
+        var incoming = snapshot?.State;
         if (!launchRequested && TitleScreen.Class.ME is { isMainMenu: true } title)
         {
-            if (!host && seed != 0 && readyForSeed != seed)
+            if (!host && seed != 0 && (readyForSeed != seed || readyForHost != peerId))
                 ready = false;
-            var peerReady = incoming?.Lobby?.Ready == true;
+            var peerReady = snapshot is { IsFresh: true } && incoming?.Lobby?.Ready == true;
             var menuState = (seed, peerReady, ready, lobbyError, session.ConnectionError);
             if (!ReferenceEquals(lobbyMenu, title) || lastMenuState != menuState)
                 title.mainMenu();
 #if COOP_QA
-            if (qa is not null && seed != 0 && (host ? peerReady : !ready))
-                StartOrReady(title);
+            qa?.DriveLobby(seed != 0 && (host ? peerReady : !ready), () => StartOrReady(title));
 #endif
-            if (!host && ready && seed != 0 && incoming?.Lobby?.Started == true)
-                StartRun(title, seed);
+            if (!host && ready && seed != 0 && snapshot is { IsFresh: true } && incoming?.Lobby?.Started == true)
+                StartRun(title, seed, peerId);
             if (!launchRequested)
                 session.Publish(null, lobby: new LobbyState(ready, false));
             return;
@@ -140,7 +140,9 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
             remote = null;
         }
         reportedLayoutMismatch = layoutMismatch;
-        players.Update(hero, remote?.Player);
+        players.Update(hero, remote?.Player, snapshot?.At ?? 0);
+        if (snapshot is not { IsFresh: true })
+            remote = null;
         exits.Update(hero, remote);
         shops.Update(hero, remote);
         loot.Update(hero, player, remote);
@@ -169,8 +171,8 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
     {
         original(title);
         lobbyMenu = title;
-        var seed = session?.RunSeed ?? 0;
-        var peerReady = session?.Remote?.Lobby?.Ready == true;
+        var (seed, _, frame) = session?.ObservePeer() ?? default;
+        var peerReady = frame is { IsFresh: true, State.Lobby.Ready: true };
         lastMenuState = (seed, peerReady, ready, lobbyError, session?.ConnectionError);
         title.clearMenu();
         if (lobbyError is { } error)
@@ -206,11 +208,14 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
 
     private void StartOrReady(TitleScreen title)
     {
-        var seed = session?.RunSeed ?? 0;
-        if (seed == 0 || launchRequested || (host ? session?.Remote?.Lobby?.Ready != true : ready))
+        if (session is null)
+            return;
+        var (seed, peerId, snapshot) = session.ObservePeer();
+        if (seed == 0 || launchRequested || snapshot is not { IsFresh: true } ||
+            (host ? snapshot.State.Lobby?.Ready != true : ready))
             return;
 
-        if (host && !session!.TryReservePeerForRun())
+        if (host && !session.TryReservePeerForRun(peerId))
             return;
 
         try
@@ -232,14 +237,15 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         lobbyError = null;
         ready = true;
         readyForSeed = seed;
+        readyForHost = peerId;
         if (host)
-            StartRun(title, seed);
+            StartRun(title, seed, peerId);
     }
 
-    private void StartRun(TitleScreen title, int seed)
+    private void StartRun(TitleScreen title, int seed, Guid peerId)
     {
         if (!host)
-            session!.PinHostForRun(seed);
+            session!.PinHostForRun(seed, peerId);
         launchRequested = true;
         runSeed = seed;
         session!.Publish(null, lobby: new LobbyState(ready, host));

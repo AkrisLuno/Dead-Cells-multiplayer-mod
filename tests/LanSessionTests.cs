@@ -30,11 +30,12 @@ public sealed class LanSessionTests
         var reroll = new RerollRequest(shop, 0);
         var stock = new ShopStock(shop, 1, 1, false,
             [new BoothStock(9, 2, 250, new ItemStock(0, "BloodSword", 2, 0, ["Quality"], []), null)]);
+        var stocks = new[] { stock };
         var level = new LootLevel("PrisonStart", 111, 42);
         var batch = new DropBatch(1, 6, 2, 2.0, [new MobDrop(DropKind.Gold, 100), new MobDrop(DropKind.Cell)]);
         var frame = new DropFrame(level, [batch]);
         var receipt = new DropReceipt(level, 1);
-        host.Publish(fromHost, commit, started, shopStocks: [stock], dropFrame: frame);
+        host.Publish(fromHost, commit, started, shopStocks: stocks, dropFrame: frame);
         client.Publish(fromClient, request, ready, reroll: reroll, dropReceipt: receipt);
         await WaitUntil(() => host.Remote?.Player == fromClient && client.Remote?.Player == fromHost, deadline.Token);
         Assert.Equal(request, host.Remote?.Exit);
@@ -43,15 +44,21 @@ public sealed class LanSessionTests
         Assert.Equal(started, client.Remote?.Lobby);
         Assert.Equal(reroll, host.Remote?.Reroll);
         Assert.Equal(receipt, host.Remote?.DropReceipt);
-        Assert.Equal(batch.Drops, Assert.Single(client.Remote!.DropFrame!.Batches).Drops);
-        var received = Assert.Single(client.Remote!.ShopStocks!);
+        var receivedControls = client.Remote!.Controls;
+        Assert.Equal(batch.Drops, Assert.Single(receivedControls.DropFrame!.Batches).Drops);
+        var received = Assert.Single(receivedControls.ShopStocks!);
         Assert.Equal(1, received.Revision);
         Assert.Equal(250, Assert.Single(received.Booths).Price);
         Assert.Equal("Quality", Assert.Single(received.Booths[0].Item.Affixes));
-        Assert.True(host.TryReservePeerForRun());
+        Assert.False(host.TryReservePeerForRun(Guid.NewGuid()));
+        Assert.True(host.TryReservePeerForRun(host.ObservePeer().PlayerId));
         var seed = host.RunSeed;
         Assert.True(seed > 0);
         Assert.Equal(seed, client.RunSeed);
+        var movedHost = fromHost with { X = 175 };
+        host.Publish(movedHost, commit, started, shopStocks: stocks, dropFrame: frame);
+        await WaitUntil(() => client.Remote?.Player == movedHost, deadline.Token);
+        Assert.Same(receivedControls, client.Remote!.Controls);
 
         client.Dispose();
         await WaitUntil(() => host.RunSeed == 0 && host.Remote is null, deadline.Token);
@@ -62,10 +69,14 @@ public sealed class LanSessionTests
             Assert.Null(host.Remote);
         }
         using var rejoined = new LanSession(false, address, _ => { }, partner);
-        await WaitUntil(() => rejoined.Remote?.Player == fromHost, deadline.Token);
+        await WaitUntil(() => rejoined.Remote?.Player == movedHost, deadline.Token);
         Assert.Null(host.Remote?.Player);
         Assert.Equal(seed, rejoined.RunSeed);
         Assert.Equal(batch.Sequence, Assert.Single(rejoined.Remote!.DropFrame!.Batches).Sequence);
+
+        host.Publish(movedHost, lobby: started);
+        await WaitUntil(() => rejoined.Remote is { Lobby.Started: true, ShopStocks: null, DropFrame: null, Exit: null },
+            deadline.Token);
     }
 
     [Theory]

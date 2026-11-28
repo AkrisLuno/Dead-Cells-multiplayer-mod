@@ -5,13 +5,18 @@ param(
     [Parameter(Mandatory)][string] $CoopAnythingRoot,
     [Net.IPAddress] $Address = '127.0.0.1',
     [ValidateRange(1024, 65535)][int] $Port = 46239,
+    [ValidateRange(1024, 65535)][int] $JoinPort = $Port,
     [switch] $VerifyExit,
     [switch] $VerifyShop,
-    [switch] $VerifyLoot
+    [switch] $VerifyLoot,
+    [switch] $VerifyPresentation,
+    [switch] $VerifyNormal
 )
 
 $ErrorActionPreference = 'Stop'
-if (@($VerifyExit, $VerifyShop, $VerifyLoot).Where({ $_ }).Count -gt 1) { throw 'Choose one gameplay check per run.' }
+if (@($VerifyExit, $VerifyShop, $VerifyLoot, $VerifyPresentation, $VerifyNormal).Where({ $_ }).Count -gt 1) {
+    throw 'Choose one gameplay check per run.'
+}
 $root = (Resolve-Path -LiteralPath $InstanceRoot).Path
 $packagePath = (Resolve-Path -LiteralPath $Package).Path
 $slotTool = Join-Path $CoopAnythingRoot 'tools/gameslot/gameslot.py'
@@ -64,13 +69,25 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not acquire two Co-op Anything test slot
 
 try {
     if ($env:DOTNET_ROOT) { $env:Path = "$env:DOTNET_ROOT;$env:Path" }
-    $env:DEAD_CELLS_COOP_QA = if ($VerifyLoot) { 'loot' } elseif ($VerifyShop) { 'shop' } elseif ($VerifyExit) { 'exit' } else { '1' }
+    $env:DEAD_CELLS_COOP_QA = if ($VerifyNormal) {
+        'normal'
+    } elseif ($VerifyPresentation) {
+        'presentation'
+    } elseif ($VerifyLoot) {
+        'loot'
+    } elseif ($VerifyShop) {
+        'shop'
+    } elseif ($VerifyExit) {
+        'exit'
+    } else {
+        '1'
+    }
     foreach ($side in 'Host', 'Client') {
         $instance = $instances[$side]
         $destination = Join-Path $instance.Root 'coremod/mods/DeadCellsMultiplayerMod'
         New-Item -ItemType Directory -Path $destination -Force | Out-Null
         Copy-Item -Path (Join-Path $packagePath '*') -Destination $destination -Force
-        $env:DEAD_CELLS_COOP = if ($side -eq 'Host') { "host:$Port" } else { "join:${Address}:$Port" }
+        $env:DEAD_CELLS_COOP = if ($side -eq 'Host') { "host:$Port" } else { "join:${Address}:$JoinPort" }
         $instance.StopSignal = Join-Path $instance.Root ('.stop-' + $lease)
         $env:DEAD_CELLS_COOP_QA_STOP = $instance.StopSignal
         $instance.Started = [DateTime]::UtcNow
@@ -105,6 +122,18 @@ try {
         foreach ($side in 'Host', 'Client') {
             (Wait-ForGameLog $instances[$side] $pattern $deadline).Line
             (Wait-ForGameLog $instances[$side] 'COOP_QA PICKUP Paid=371 RemainingGold=1' $deadline).Line
+        }
+    }
+    if ($VerifyPresentation) {
+        $pattern = 'COOP_QA PRESENTATION Outline=True Direction=-?1 Sound=\S+ Muted=True'
+        foreach ($side in 'Host', 'Client') {
+            (Wait-ForGameLog $instances[$side] $pattern $deadline).Line
+            (Wait-ForGameLog $instances[$side] 'COOP_QA AUDIO Near=\S+ Middle=\S+ FarSilent=True' $deadline).Line
+        }
+    }
+    if ($VerifyNormal) {
+        foreach ($side in 'Host', 'Client') {
+            (Wait-ForGameLog $instances[$side] 'COOP_QA NORMAL resumed. Partner jump, dodge and movement sound observed.' $deadline).Line
         }
     }
     $hostResult.Line

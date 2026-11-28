@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -11,7 +12,7 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class LanSession : IDisposable
 {
-    private const int ProtocolVersion = 6;
+    private const int ProtocolVersion = 7;
     private const int MaximumFrameBytes = 256 * 1024;
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
     private readonly CancellationTokenSource shutdown = new();
@@ -22,13 +23,13 @@ internal sealed class LanSession : IDisposable
     private Connection? connection;
     private PeerState? local;
     private Guid reservedPeer;
-    private int pinnedSeed;
+    private HostIdentity? pinnedHost;
     private string? connectionError;
     private int disposed;
 
     public bool IsHost { get; }
     public int RunSeed => Volatile.Read(ref connection)?.Seed ?? 0;
-    public PeerState? Remote => Volatile.Read(ref connection)?.Remote;
+    public PeerState? Remote => Volatile.Read(ref connection)?.Latest?.State;
     public string? ConnectionError => Volatile.Read(ref connectionError);
 
     public LanSession(bool isHost, IPEndPoint endpoint, Action<string> report, Guid? playerId = null)
@@ -42,13 +43,19 @@ internal sealed class LanSession : IDisposable
     public void Publish(PlayerState? state, ExitDecision? exit = null, LobbyState? lobby = null,
         RerollRequest? reroll = null, ShopStock[]? shopStocks = null,
         DropFrame? dropFrame = null, DropReceipt? dropReceipt = null)
-        => Volatile.Write(ref local, new PeerState(state, exit, lobby, reroll, shopStocks, dropFrame, dropReceipt));
+        => Volatile.Write(ref local, new PeerState(state, new PeerControls(exit, lobby, reroll, shopStocks, dropFrame, dropReceipt)));
 
-    public bool TryReservePeerForRun()
+    public (int Seed, Guid PlayerId, ReceivedState? Snapshot) ObservePeer()
+    {
+        var peer = Volatile.Read(ref connection);
+        return peer is null ? default : (peer.Seed, peer.PlayerId, peer.Latest);
+    }
+
+    public bool TryReservePeerForRun(Guid peerId)
     {
         lock (admission)
         {
-            if (connection is not { Remote.Lobby.Ready: true } peer)
+            if (connection is not { Latest: { IsFresh: true, State.Lobby.Ready: true } } peer || peer.PlayerId != peerId)
                 return false;
             reservedPeer = peer.PlayerId;
             return true;
@@ -61,7 +68,7 @@ internal sealed class LanSession : IDisposable
             reservedPeer = Guid.Empty;
     }
 
-    public void PinHostForRun(int seed) => Volatile.Write(ref pinnedSeed, seed);
+    public void PinHostForRun(int seed, Guid id) => Volatile.Write(ref pinnedHost, new HostIdentity(seed, id));
 
     private async Task ListenAsync(IPEndPoint endpoint, CancellationToken cancellation)
     {
@@ -145,9 +152,9 @@ internal sealed class LanSession : IDisposable
                 {
                     await SendAsync(stream, new Hello(ProtocolVersion, 0, playerId), handshake.Token).ConfigureAwait(false);
                     reply = await ReadAsync<Hello>(stream, handshake.Token).ConfigureAwait(false);
-                    var expected = Volatile.Read(ref pinnedSeed);
+                    var expected = Volatile.Read(ref pinnedHost);
                     if (reply.Version != ProtocolVersion || reply.PlayerId == Guid.Empty ||
-                        reply.Seed <= 0 || (expected != 0 && reply.Seed != expected))
+                        reply.Seed <= 0 || (expected is not null && (reply.Seed != expected.Seed || reply.PlayerId != expected.Id)))
                     {
                         Volatile.Write(ref connectionError, reply.Version == ProtocolVersion && reply.Seed == 0
                             ? "Host already has a co-op partner" : "Host session or mod version changed");
@@ -184,31 +191,48 @@ internal sealed class LanSession : IDisposable
     private async Task PublishChangesAsync(NetworkStream stream, CancellationToken cancellation)
     {
         using var timer = new PeriodicTimer(TickInterval);
+        PeerControls? sent = null;
         while (await timer.WaitForNextTickAsync(cancellation).ConfigureAwait(false))
-            await SendAsync(stream, Volatile.Read(ref local), cancellation).ConfigureAwait(false);
+        {
+            var snapshot = Volatile.Read(ref local);
+            var controls = snapshot?.Controls ?? PeerControls.Empty;
+            // TCP keeps these ordered, so the receiver can retain unchanged world state.
+            await SendAsync(stream, new WireState(snapshot?.Player, controls == sent ? null : controls), cancellation)
+                .ConfigureAwait(false);
+            sent = controls;
+        }
     }
 
     private async Task ReceiveChangesAsync(NetworkStream stream, Connection connected, CancellationToken cancellation)
     {
+        PeerControls? controls = null;
         while (!cancellation.IsCancellationRequested)
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             timeout.CancelAfter(TimeSpan.FromSeconds(8));
-            PeerState? state;
+            WireState? wire;
             try
             {
-                state = await ReadAsync<PeerState?>(stream, timeout.Token).ConfigureAwait(false);
+                wire = await ReadAsync<WireState?>(stream, timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
             {
                 throw new IOException("No LAN snapshots received in eight seconds.");
             }
-            if (state is { IsValid: false } || (IsHost
-                    ? state?.Exit is { Committed: true } || state?.Lobby is { Started: true } ||
-                      state?.ShopStocks is not null || state?.DropFrame is not null
-                    : state?.Reroll is not null || state?.DropReceipt is not null))
+            if (wire is null || wire.Player is { IsValid: false })
                 throw new InvalidDataException("Invalid peer snapshot.");
-            connected.Remote = state;
+            if (wire.Controls is { } changes)
+            {
+                if (!changes.IsValid || (IsHost
+                        ? changes.Exit is { Committed: true } || changes.Lobby is { Started: true } ||
+                          changes.ShopStocks is not null || changes.DropFrame is not null
+                        : changes.Reroll is not null || changes.DropReceipt is not null))
+                    throw new InvalidDataException("Invalid peer snapshot.");
+                controls = changes;
+            }
+            if (controls is null)
+                throw new InvalidDataException("Initial peer snapshot has no world state.");
+            connected.Latest = new ReceivedState(new PeerState(wire.Player, controls), Stopwatch.GetTimestamp());
         }
     }
 
@@ -247,26 +271,50 @@ internal sealed class LanSession : IDisposable
     {
         public int Seed { get; } = seed;
         public Guid PlayerId { get; } = playerId;
-        public volatile PeerState? Remote;
+        public volatile ReceivedState? Latest;
     }
 
     private readonly record struct Hello(int Version, int Seed, Guid PlayerId);
+    private sealed record HostIdentity(int Seed, Guid Id);
+    private sealed record WireState(PlayerState? Player, PeerControls? Controls);
 }
 
 internal sealed record PlayerState(string Level, double X, double Y, int Direction, string Animation, int LevelSeed = 0)
 {
     public ulong Layout { get; init; }
+    public string? SpriteGroup { get; init; }
+    public MovementSound[]? Sounds { get; init; }
 
     internal bool IsValid => Level?.Length is > 0 and <= 96 &&
-                             Animation?.Length is <= 96 &&
+                             Animation is "idle" or "run" or "jump" or "fall" &&
+                             (SpriteGroup is null || SpriteGroup.Length is > 0 and <= 80) &&
+                             (Sounds is null || Sounds.Length <= 4 &&
+                              Array.TrueForAll(Sounds, sound => sound is { IsValid: true })) &&
                              double.IsFinite(X) && double.IsFinite(Y) &&
                              Math.Abs(X) <= 50000 && Math.Abs(Y) <= 50000 && Direction is -1 or 1;
 }
 
-internal sealed record PeerState(PlayerState? Player, ExitDecision? Exit, LobbyState? Lobby,
+internal sealed record ReceivedState(PeerState State, long At)
+{
+    internal bool IsFresh => Stopwatch.GetElapsedTime(At).TotalMilliseconds <= 800;
+}
+
+internal sealed record PeerState(PlayerState? Player, PeerControls Controls)
+{
+    internal ExitDecision? Exit => Controls.Exit;
+    internal LobbyState? Lobby => Controls.Lobby;
+    internal RerollRequest? Reroll => Controls.Reroll;
+    internal ShopStock[]? ShopStocks => Controls.ShopStocks;
+    internal DropFrame? DropFrame => Controls.DropFrame;
+    internal DropReceipt? DropReceipt => Controls.DropReceipt;
+}
+
+internal sealed record PeerControls(ExitDecision? Exit, LobbyState? Lobby,
     RerollRequest? Reroll, ShopStock[]? ShopStocks, DropFrame? DropFrame, DropReceipt? DropReceipt)
 {
-    internal bool IsValid => Player is not { IsValid: false } && Exit is not { IsValid: false } &&
+    internal static readonly PeerControls Empty = new(null, null, null, null, null, null);
+
+    internal bool IsValid => Exit is not { IsValid: false } &&
                              Reroll is not { IsValid: false } && DropFrame is not { IsValid: false } &&
                              DropReceipt is not { IsValid: false } &&
                              (ShopStocks is null || ShopStocks.Length <= ShopStock.MaxShops &&

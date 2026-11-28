@@ -11,6 +11,8 @@
     <Compile Include="../CoopSaves.cs" Link="CoopSaves.cs" />
     <Compile Include="../ShopState.cs" Link="ShopState.cs" />
     <Compile Include="../LootState.cs" Link="LootState.cs" />
+    <Compile Include="../MovementSound.cs" Link="MovementSound.cs" />
+    <Compile Include="../RemoteMotion.cs" Link="RemoteMotion.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />

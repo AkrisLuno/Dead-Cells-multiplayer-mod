@@ -18,6 +18,7 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<string> report)
 {
+    private readonly NormalPlayQa? normal = mode == "normal" ? new NormalPlayQa(report) : null;
     private static readonly string[] TestWeaponIds = ["RustySword", "TwinDaggers", "BloodSword", "Bow", "WoodShield",
         "BroadSword", "Torch", "IceBow", "Shovel", "Rapier", "BalancedBlade", "AssassinDagger"];
     private PlayerState? beginning;
@@ -46,9 +47,13 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
     private string? dropFood;
     private long pickedAt;
     private int moneyBeforePickup;
+    private long presentationReadyAt;
+    private long calledStepAt;
+    private int heardBeforeStep;
 
     internal bool CheckForShutdown()
     {
+        normal?.UpdateInput();
         var now = Stopwatch.GetTimestamp();
         if (stopSignal is null || now < nextShutdownCheck)
             return shutdownRequested != 0;
@@ -66,6 +71,14 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (dc.Main.Class.ME.onExit() || Stopwatch.GetElapsedTime(shutdownRequested, now).TotalSeconds >= 5)
             dc.hxd.System.Class.exit.Invoke();
         return true;
+    }
+
+    internal void DriveLobby(bool canConfirm, Action shortcut)
+    {
+        if (normal is not null)
+            normal.Lobby(canConfirm);
+        else if (canConfirm)
+            shortcut();
     }
 
     internal DropReceipt? OutgoingReceipt(DropReceipt? receipt)
@@ -90,6 +103,13 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (remote is null || local.Level != remote.Level)
             return;
 
+        if (normal is not null)
+        {
+            if (normal.Update(hero!, local, remote, players))
+                Complete(hero!, local);
+            return;
+        }
+
         if (mode == "shop")
         {
             TickShop(hero!, local, remote);
@@ -98,6 +118,11 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (mode == "loot")
         {
             TickLoot(hero!, local, loot);
+            return;
+        }
+        if (mode == "presentation")
+        {
+            TickPresentation(hero!, local, remote, players);
             return;
         }
 
@@ -263,6 +288,45 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         hero.setPosPixel(targetX, local.Y);
         hero.updatePositionXY();
         hero.spriteUpdate();
+    }
+
+    private void TickPresentation(Hero hero, PlayerState local, PlayerState remote, NativePlayers players)
+    {
+        hero.dir = host ? 1 : -1;
+        if (remote.Direction != (host ? -1 : 1) || !players.ReplicaShowsPartner(remote))
+            return;
+        if (presentationReadyAt == 0)
+        {
+            presentationReadyAt = Stopwatch.GetTimestamp();
+            heardBeforeStep = players.RemoteSounds;
+            report($"COOP_QA replica outlined and facing {remote.Direction}, visual group {remote.SpriteGroup}.");
+        }
+        var age = Stopwatch.GetElapsedTime(presentationReadyAt).TotalSeconds;
+        if (calledStepAt == 0 && age >= 2)
+        {
+            hero.playStepSound();
+            calledStepAt = Stopwatch.GetTimestamp();
+            return;
+        }
+        if (calledStepAt == 0 || Stopwatch.GetElapsedTime(calledStepAt).TotalSeconds < 0.8)
+            return;
+        var presentationSounds = players.RemoteSounds - heardBeforeStep;
+        if (presentationSounds != 1 || !dc.Main.Class.ME.options.mute)
+        {
+            finished = true;
+            report($"COOP_QA FAIL: expected one partner step and muted output, heard {presentationSounds} sound cues. Last={players.LastRemoteSound}.");
+            return;
+        }
+        var (near, middle, farSilent) = players.ProbeSoundDistance(hero, remote);
+        if (near <= 0 || Math.Abs(middle / near - 0.5) >= 0.001 || !farSilent)
+        {
+            finished = true;
+            report($"COOP_QA FAIL: movement sound falloff near={near} middle={middle} farSilent={farSilent}.");
+            return;
+        }
+        report(FormattableString.Invariant($"COOP_QA AUDIO Near={near:F3} Middle={middle:F3} FarSilent={farSilent}"));
+        report($"COOP_QA PRESENTATION Outline=True Direction={remote.Direction} Sound={players.LastRemoteSound} Muted=True");
+        Complete(hero, local);
     }
 
     private void TickLoot(Hero hero, PlayerState local, NativeLoot loot)
