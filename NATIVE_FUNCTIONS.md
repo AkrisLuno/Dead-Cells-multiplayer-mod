@@ -1,5 +1,13 @@
 # Native function names
 
+## Mob loot
+
+- `Mob.dropLoot`
+- `Level.dropMobLoots`
+- `Level.updatedDelayedLoots`
+- `Loot.pickUp`
+- `ItemDrop.onDropAsLoot`
+
 ## Movement, audio and effects
 
 - `Hero.landStun`
