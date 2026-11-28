@@ -25,6 +25,7 @@ internal sealed class NativeRevival
     private long protectedUntil;
     private bool hasPartner;
     private bool interactWasPressed;
+    private bool wasTargetable;
 
     internal NativeRevival(bool host, Action<string> log)
     {
@@ -84,6 +85,9 @@ internal sealed class NativeRevival
             return true;
         }
         downed = hero;
+        wasTargetable = hero._targetable;
+        if (wasTargetable)
+            hero.set_targetable(false);
         deathSequence++;
         reviveFor = 0;
         bothDownAt = 0;
@@ -165,6 +169,8 @@ internal sealed class NativeRevival
         protectedHero = hero;
         protectedUntil = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 2;
         hero.setLifeAndRally(Math.Max(1, (int)((long)hero.maxLife * ReviveHealthPercent / 100)), 0);
+        if (wasTargetable)
+            hero.set_targetable(true);
         hero.unlockControls();
         hero._level.fx.healing(hero, 0x73FFC2);
         hero.popText("Revived!".AsHaxeString(), 0x73FFC2);

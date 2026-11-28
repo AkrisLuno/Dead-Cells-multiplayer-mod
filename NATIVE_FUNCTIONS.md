@@ -6,6 +6,8 @@
 - `Entity.applyAttackResult`, `Mob.applyAttackResult`, `AttackData.init`, `AttackData.getHitX`
 - `Entity.setPosPixel`, `Entity.updatePositionXY`, `Entity.spriteUpdate`, `Mob.onDie`, `Mob.destroy`
 - `Fx.hitLines`, `Fx.mobDeath`
+- `Entity.set_team`, `Entity.set_targetable`, `Entity.canReceiveAttack`, `Mob.setAttackTarget`
+- `AttackUtils.createFromMob`, `AttackUtils.hit`
 
 ## Co-op revival
 

@@ -23,4 +23,21 @@ public sealed class EnemyStateTests
         Assert.False((hit with { Damage = int.MaxValue }).IsValid);
         Assert.False((enemy with { Life = 41 }).IsValid);
     }
+
+    [Fact]
+    public void EnemyStrikesRequireAnAuthoritativeAttackerAndOrderedReceipts()
+    {
+        var level = new LootLevel("PrisonStart", 24, 1);
+        var key = new EnemyKey("Zombie", 10, 20, 0);
+        var enemy = new EnemyState(key, 240, 480, 1, 40, 40, "idle", 1, 1, 1, false, null);
+        var strike = new EnemyStrike(1, key, 20, 0, 250, 480);
+        var world = new EnemyWorld(level, 0, [enemy], [strike]);
+        Assert.True(world.IsValid);
+        Assert.False((world with { Enemies = [] }).IsValid);
+        Assert.False((world with { Strikes = [strike, strike] }).IsValid);
+        Assert.False((strike with { Power = double.NaN }).IsValid);
+        Assert.False((strike with { DamageType = 12 }).IsValid);
+        Assert.True(new EnemySync(ReceivedStrike: 1).IsValidFor(receiverIsHost: true));
+        Assert.False(new EnemySync(ReceivedStrike: 1).IsValidFor(receiverIsHost: false));
+    }
 }

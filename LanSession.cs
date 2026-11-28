@@ -12,7 +12,7 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class LanSession : IDisposable
 {
-    private const int ProtocolVersion = 13;
+    private const int ProtocolVersion = 14;
     private const int MaximumFrameBytes = 640 * 1024;
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
     private readonly CancellationTokenSource shutdown = new();

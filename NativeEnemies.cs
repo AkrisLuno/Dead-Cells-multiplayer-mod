@@ -47,6 +47,7 @@ internal sealed class NativeEnemies
     private readonly NativePlayers players;
     private readonly Dictionary<Level, Roster> rosters = [];
     private readonly Queue<EnemyHit> pending = new();
+    private readonly Queue<EnemyStrike> strikes = new();
     private Level? level;
     private LootLevel? scope;
     private EnemyWorld? world;
@@ -57,10 +58,14 @@ internal sealed class NativeEnemies
     private int acknowledged;
     private int directionOverride;
     private bool spawningReplica;
+    private int nextStrike;
+    private int receivedStrike;
 
 #if COOP_QA
     internal int ConfirmedImpacts { get; private set; }
     internal int MirroredDeaths { get; private set; }
+    internal int GuestStrikes => host ? nextStrike : receivedStrike;
+    internal int GuestStrikeReceipt { get; private set; }
     internal EnemyWorld? ObservedWorld => host ? world : lastWorld;
     internal Mob? FindForQa(EnemyKey key) => level is not null && GetRoster(level).ByKey.TryGetValue(key, out var enemy)
         ? enemy.Mob : null;
@@ -81,6 +86,9 @@ internal sealed class NativeEnemies
         Hook_Entity.canUpdate += (original, entity) =>
             (entity is not Mob mob || !IsReplica(mob)) && original(entity);
         Hook_Entity.applyAttackResult += OnAttack;
+        Hook_Entity.canReceiveAttack += (original, entity, attack) =>
+            !ReferenceEquals(entity, players.Partner) ? original(entity, attack) :
+            host && entity._targetable && attack.source is Mob mob && IsEnemy(mob);
         Hook_Mob.onDie += (original, mob) =>
         {
             if (host && inRun() && IsEnemy(mob) && mob.type?.ToString() is { } kind &&
@@ -119,6 +127,25 @@ internal sealed class NativeEnemies
 
     private void OnAttack(Hook_Entity.orig_applyAttackResult original, Entity entity, AttackData attack)
     {
+        if (ReferenceEquals(entity, players.Partner))
+        {
+            if (host && entity._targetable && ReferenceEquals(entity._level, level) &&
+                attack.source is Mob hostile && IsEnemy(hostile) && attack.finalDmg > 0 &&
+                Register(hostile._level, hostile, hostile.type?.ToString() ?? "", hostile.cx, hostile.cy,
+                    0, hostile.trueLifeTier) is { } enemy)
+            {
+                var power = attack.baseDmg switch { double value => value, int value => value, _ => attack.finalDmg };
+                var strike = new EnemyStrike(nextStrike + 1, enemy.Key, power, (int?)attack.dmgType?.Index ?? 0,
+                    (entity.cx + entity.xr) * 24, (entity.cy + entity.yr) * 24);
+                if (strike.IsValid && strikes.Count < 256)
+                {
+                    enemy.WasHostile = true;
+                    nextStrike++;
+                    strikes.Enqueue(strike);
+                }
+            }
+            return;
+        }
         if (!inRun() || entity is not Mob { destroyed: false } mob || !IsEnemy(mob))
         {
             original(entity, attack);
@@ -167,7 +194,10 @@ internal sealed class NativeEnemies
     internal EnemySync? Update(Hero? hero, PlayerState? player, PeerState? peer)
     {
         if (!inRun() || hero?._level is not { } current || player is null)
+        {
+            players.SetPartnerTargetable(hero, false);
             return null;
+        }
         if (!ReferenceEquals(level, current))
         {
             level = current;
@@ -175,8 +205,10 @@ internal sealed class NativeEnemies
             world = null;
             lastWorld = null;
             pending.Clear();
+            strikes.Clear();
             sending = null;
             nextHit = acknowledged = 0;
+            nextStrike = receivedStrike = 0;
             sampledAt = 0;
             foreach (var old in rosters.Keys.Where(old => old.destroyed).ToArray())
                 rosters.Remove(old);
@@ -185,8 +217,18 @@ internal sealed class NativeEnemies
         var roster = GetRoster(current);
         if (host)
         {
-            if (peer?.Enemies.Hits is { } hits && hits.Level == scope && scope.Matches(peer.Player))
-                ApplyHits(hero, roster, hits, peer.Player!);
+            var matched = peer is not null && scope.Matches(peer.Player);
+            players.SetPartnerTargetable(hero, matched && peer!.Player is { Downed: 0 });
+            if (matched)
+            {
+#if COOP_QA
+                GuestStrikeReceipt = peer!.Enemies.ReceivedStrike;
+#endif
+                while (strikes.TryPeek(out var strike) && strike.Sequence <= peer!.Enemies.ReceivedStrike)
+                    strikes.Dequeue();
+                if (peer!.Enemies.Hits is { } hits && hits.Level == scope && peer.Player is { Downed: 0 } guest)
+                    ApplyHits(hero, roster, hits, guest);
+            }
             PublishWorld(current, roster);
             return new EnemySync(World: world);
         }
@@ -201,12 +243,41 @@ internal sealed class NativeEnemies
             if (lastWorld is null)
                 Discover(current, roster);
             ApplyWorld(current, roster, incoming);
+            ApplyStrikes(hero, roster, incoming.Strikes);
             lastWorld = incoming;
         }
         if (pending.Count == 0)
-            return null;
+            return receivedStrike == 0 ? null : new EnemySync(ReceivedStrike: receivedStrike);
         sending ??= new EnemyHits(scope, pending.Take(EnemyHits.MaxHits).ToArray());
-        return new EnemySync(Hits: sending);
+        return new EnemySync(Hits: sending, ReceivedStrike: receivedStrike);
+    }
+
+    private void ApplyStrikes(Hero hero, Roster roster, EnemyStrike[]? incoming)
+    {
+        if (incoming is null)
+            return;
+        foreach (var strike in incoming)
+        {
+            if (strike.Sequence <= receivedStrike)
+                continue;
+            receivedStrike = strike.Sequence;
+            var dx = (hero.cx + hero.xr) * 24 - strike.X;
+            var dy = (hero.cy + hero.yr) * 24 - strike.Y;
+            if (dx * dx + dy * dy > 120 * 120 || !roster.ByKey.TryGetValue(strike.Attacker, out var attacker) ||
+                attacker.Mob.destroyed)
+                continue;
+            var attack = AttackUtils.Class.createFromMob.Invoke(attacker.Mob, strike.Power, null);
+            attack.dmgType = strike.DamageType switch
+            {
+                1 => new DamageType.PhysicalAffect(), 2 => new DamageType.Bleed(), 3 => new DamageType.Poison(),
+                4 => new DamageType.Fall(), 5 => new DamageType.Fire(), 6 => new DamageType.Electricity(),
+                7 => new DamageType.ElectricityOverflow(), 8 => new DamageType.DarkMatter(),
+                9 => new DamageType.ExtraDamage(), 10 => new DamageType.Frost(), 11 => new DamageType.BleedExplosion(),
+                _ => new DamageType.Physical()
+            };
+            if (hero.canReceiveAttack(attack))
+                AttackUtils.Class.hit.Invoke(attack, hero);
+        }
     }
 
     private void ApplyHits(Hero hero, Roster roster, EnemyHits batch, PlayerState peer)
@@ -272,8 +343,17 @@ internal sealed class NativeEnemies
                 poses.Add(pose);
             }
         }
-        if (world is null || world.Acknowledged != acknowledged || !world.Enemies.SequenceEqual(poses))
-            world = new EnemyWorld(scope!, acknowledged, poses.ToArray());
+        EnemyStrike[] outgoingStrikes = [];
+        if (strikes.Count > 0)
+        {
+            var validAttackers = poses.Select(pose => pose.Key).ToHashSet();
+            while (strikes.TryPeek(out var strike) && !validAttackers.Contains(strike.Attacker))
+                strikes.Dequeue();
+            outgoingStrikes = strikes.Where(strike => validAttackers.Contains(strike.Attacker)).Take(EnemyWorld.MaxStrikes).ToArray();
+        }
+        if (world is null || world.Acknowledged != acknowledged || !world.Enemies.SequenceEqual(poses) ||
+            !(world.Strikes ?? []).SequenceEqual(outgoingStrikes))
+            world = new EnemyWorld(scope!, acknowledged, poses.ToArray(), outgoingStrikes);
     }
 
     private static EnemyState? ReadPose(Enemy enemy)

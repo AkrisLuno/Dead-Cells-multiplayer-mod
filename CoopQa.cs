@@ -56,6 +56,10 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
     private long clientHitSeenAt;
     private int combatStep;
     private EnemyKey? combatKey;
+    private Zombie? attackingZombie;
+    private int initialCombatLife;
+    private bool zombieTargetedGuest;
+    private bool testedNativeStrike;
     private long revivalStartedAt;
     private long reviveKeyAt;
     private long lastRevivePress;
@@ -146,6 +150,11 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (mode == "combat")
         {
             TickCombat(hero!, local, remote, enemies);
+            return;
+        }
+        if (mode == "enemy-target")
+        {
+            TickEnemyTarget(hero!, local, remote, players, enemies);
             return;
         }
         if (mode == "revive")
@@ -313,6 +322,56 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
             finished = true;
             report($"COOP_QA FAIL: combat step={combatStep} state={state} mobs={frame?.Enemies.Length}" +
                 $" ack={frame?.Acknowledged} impacts={enemies.ConfirmedImpacts} deaths={enemies.MirroredDeaths}.");
+        }
+    }
+
+    private void TickEnemyTarget(Hero hero, PlayerState local, PlayerState remote, NativePlayers players, NativeEnemies enemies)
+    {
+        if (combatStartedAt == 0)
+        {
+            if (players.Partner is not { } partner || hero.controlsLocked(Ref<bool>.Null))
+                return;
+            combatStartedAt = Stopwatch.GetTimestamp();
+            initialCombatLife = hero.life;
+            if (host)
+            {
+                var level = hero._level;
+                hero.set_targetable(false);
+                var cell = Math.Clamp(partner.cx + 1, 3, level.map.wid - 4);
+                attackingZombie = new Zombie(level, cell, partner.cy, 1, 1);
+                attackingZombie.init();
+                attackingZombie.setPosPixel((partner.cx + partner.xr) * 24 + 18, (partner.cy + partner.yr) * 24);
+                attackingZombie.updatePositionXY();
+                attackingZombie.hasGravity = false;
+                attackingZombie.dir = -1;
+                attackingZombie.isAlwaysUpdated = true;
+            }
+        }
+        if (host && !testedNativeStrike && players.Partner is { _targetable: true } guest &&
+            Stopwatch.GetElapsedTime(combatStartedAt).TotalSeconds >= 1)
+        {
+            testedNativeStrike = true;
+            attackingZombie!.setAttackTarget(guest);
+            zombieTargetedGuest = ReferenceEquals(attackingZombie.aTarget, guest);
+            AttackUtils.Class.createFromMobAndHit.Invoke(attackingZombie, 11.0, null, guest);
+        }
+        var passed = host
+            ? zombieTargetedGuest && enemies.GuestStrikes > 0 && enemies.GuestStrikeReceipt > 0 && hero.life == initialCombatLife
+            : enemies.GuestStrikes > 0 && hero.life > 0 && hero.life < initialCombatLife;
+        if (passed)
+        {
+            report(host ? "COOP_QA ENEMY_TARGET HostTarget=True StrikeAcknowledged=True" :
+                $"COOP_QA ENEMY_TARGET ClientHealthBefore={initialCombatLife} After={hero.life}");
+            Complete(hero, local);
+        }
+        else if (Stopwatch.GetElapsedTime(combatStartedAt).TotalSeconds > 12)
+        {
+            finished = true;
+            report($"COOP_QA FAIL: enemy target selected={zombieTargetedGuest} mobTarget={attackingZombie?.aTarget?.GetType().Name}" +
+                $" targetable={players.Partner?._targetable} mob=({attackingZombie?.cx},{attackingZombie?.cy})" +
+                $" client=({remote.X / 24:F2},{remote.Y / 24:F2}) strike={enemies.GuestStrikes}" +
+                $" received={enemies.GuestStrikeReceipt} life={hero.life}/{initialCombatLife}" +
+                $" guestOnTeam={players.Partner?._team?.members?.length}.");
         }
     }
 

@@ -34,9 +34,17 @@ internal sealed record EnemyState(EnemyKey Key, double X, double Y, int Directio
     }
 }
 
-internal sealed record EnemyWorld(LootLevel Level, int Acknowledged, EnemyState[] Enemies)
+internal sealed record EnemyStrike(int Sequence, EnemyKey Attacker, double Power, int DamageType, double X, double Y)
+{
+    internal bool IsValid => Sequence > 0 && Attacker is { IsValid: true } &&
+        Power is > 0 and <= EnemyImpact.MaxDamage && DamageType is >= 0 and <= 11 &&
+        Math.Abs(X) <= 50000 && Math.Abs(Y) <= 50000;
+}
+
+internal sealed record EnemyWorld(LootLevel Level, int Acknowledged, EnemyState[] Enemies, EnemyStrike[]? Strikes = null)
 {
     internal const int MaxEnemies = 500;
+    internal const int MaxStrikes = 24;
 
     internal bool IsValid
     {
@@ -48,6 +56,18 @@ internal sealed record EnemyWorld(LootLevel Level, int Acknowledged, EnemyState[
             foreach (var enemy in Enemies)
                 if (enemy is not { IsValid: true } || !keys.Add(enemy.Key))
                     return false;
+            if (Strikes is { } strikes)
+            {
+                if (strikes.Length > MaxStrikes)
+                    return false;
+                var previous = 0;
+                foreach (var strike in strikes)
+                {
+                    if (strike is not { IsValid: true } || strike.Sequence <= previous || !keys.Contains(strike.Attacker))
+                        return false;
+                    previous = strike.Sequence;
+                }
+            }
             return true;
         }
     }
@@ -81,11 +101,11 @@ internal sealed record EnemyHits(LootLevel Level, EnemyHit[] Hits)
     }
 }
 
-internal sealed record EnemySync(EnemyWorld? World = null, EnemyHits? Hits = null)
+internal sealed record EnemySync(EnemyWorld? World = null, EnemyHits? Hits = null, int ReceivedStrike = 0)
 {
     internal static readonly EnemySync Empty = new();
 
     internal bool IsValidFor(bool receiverIsHost) => receiverIsHost
-        ? World is null && Hits is not { IsValid: false }
-        : Hits is null && World is not { IsValid: false };
+        ? World is null && Hits is not { IsValid: false } && ReceivedStrike >= 0
+        : Hits is null && World is not { IsValid: false } && ReceivedStrike == 0;
 }

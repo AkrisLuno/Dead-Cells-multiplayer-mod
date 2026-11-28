@@ -38,6 +38,19 @@ internal sealed class NativePlayers
     internal dc.Entity? Partner => replica is { destroyed: false } ? replica : null;
     internal bool OwnsEquipment(dc.Entity? entity) => equipment.Owns(entity);
 
+    internal void SetPartnerTargetable(Hero? hero, bool targetable)
+    {
+        if (replica is not { destroyed: false } partner || replicaLevel is not { } level ||
+            targetable == partner._targetable)
+            return;
+        if (targetable)
+        {
+            partner.set_team(level.teamHero);
+            partner.maxLife = partner.life = hero!.maxLife;
+        }
+        partner.set_targetable(targetable);
+    }
+
     internal static PlayerState? Capture(Hero? hero)
     {
         if (hero is null || hero.destroyed || hero.spr is not { } sprite ||
@@ -179,7 +192,10 @@ internal sealed class NativePlayers
     private void RemoveReplica()
     {
         if (replica is { destroyed: false } old && replicaLevel is { destroyed: false })
+        {
+            old.set_targetable(false);
             old.destroy();
+        }
         replica = null;
         replicaLevel = null;
         motion.Clear();
