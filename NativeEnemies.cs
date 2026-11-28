@@ -24,6 +24,7 @@ internal sealed class NativeEnemies
         internal EnemyState? Pose { get; set; }
         internal EnemyImpact? Impact { get; set; }
         internal int AppliedImpact { get; set; }
+        internal bool WasHostile { get; set; }
     }
 
     private sealed class Roster
@@ -80,6 +81,13 @@ internal sealed class NativeEnemies
         Hook_Entity.canUpdate += (original, entity) =>
             (entity is not Mob mob || !IsReplica(mob)) && original(entity);
         Hook_Entity.applyAttackResult += OnAttack;
+        Hook_Mob.onDie += (original, mob) =>
+        {
+            if (host && inRun() && IsEnemy(mob) && mob.type?.ToString() is { } kind &&
+                Register(mob._level, mob, kind, mob.cx, mob.cy, 0, mob.trueLifeTier) is { } enemy)
+                enemy.WasHostile = true;
+            original(mob);
+        };
     }
 
     private static bool IsEnemy(Mob mob) => mob is not Boss && mob._level is { } source &&
@@ -142,6 +150,7 @@ internal sealed class NativeEnemies
         }
 
         var before = mob.life;
+        entry.WasHostile = true;
         original(entity, attack);
         var damage = before - Math.Max(0, mob.life);
         if (damage <= 0)
@@ -189,7 +198,8 @@ internal sealed class NativeEnemies
                 pending.Dequeue();
                 sending = null;
             }
-            Discover(current, roster);
+            if (lastWorld is null)
+                Discover(current, roster);
             ApplyWorld(current, roster, incoming);
             lastWorld = incoming;
         }
@@ -244,7 +254,17 @@ internal sealed class NativeEnemies
         var poses = new List<EnemyState>(roster.ByKey.Count);
         foreach (var enemy in roster.ByKey.Values)
         {
-            if (!enemy.Mob.destroyed && !IsEnemy(enemy.Mob))
+            if (!enemy.Mob.destroyed)
+            {
+                if (!IsEnemy(enemy.Mob))
+                {
+                    if (enemy.Pose is { } previous)
+                        poses.Add(previous with { Life = 0, Removed = true });
+                    continue;
+                }
+                enemy.WasHostile = true;
+            }
+            if (!enemy.WasHostile)
                 continue;
             if (ReadPose(enemy) is { IsValid: true } pose)
             {
@@ -308,13 +328,19 @@ internal sealed class NativeEnemies
 
             var dx = pose.X - (mob.cx + mob.xr) * 24;
             var dy = pose.Y - (mob.cy + mob.yr) * 24;
-            var blend = pose.Life == 0 || dx * dx + dy * dy > 192 * 192 ? 1 : 0.55;
-            mob.setPosPixel(pose.X - dx * (1 - blend), pose.Y - dy * (1 - blend));
-            mob.updatePositionXY();
-            mob.dir = pose.Direction;
-            mob.maxLife = pose.MaxLife;
-            mob.life = pose.Life;
-            mob.spriteUpdate();
+            var distance = dx * dx + dy * dy;
+            if (distance > 0.01 || mob.dir != pose.Direction)
+            {
+                var blend = pose.Life == 0 || distance < 1 || distance > 192 * 192 ? 1 : 0.55;
+                mob.setPosPixel(pose.X - dx * (1 - blend), pose.Y - dy * (1 - blend));
+                mob.updatePositionXY();
+                mob.dir = pose.Direction;
+                mob.spriteUpdate();
+            }
+            if (mob.maxLife != pose.MaxLife)
+                mob.maxLife = pose.MaxLife;
+            if (mob.life != pose.Life)
+                mob.life = pose.Life;
 
             if (pose.Impact is { } impact && impact.Revision > entry.AppliedImpact)
             {
