@@ -9,7 +9,7 @@
 
 ## Co-op revival
 
-- `Hero.onDie`, `Entity.kill`, `Hero.setLifeAndRally`, `Hero.controlsLocked`
+- `Hero.onDie`, `Entity.kill`, `Hero.tryToPreventDeath`, `Hero.checkContinueMode`, `Hero.setLifeAndRally`, `Hero.controlsLocked`
 - `Hero.lockControlsS`, `Hero.unlockControls`, `Hero.interruptHeroSkills`, `Entity.cleanDOT`
 - `Hero.canReceiveAttack`, `Hero.applyAttackResult`, `Hero.updateInteraction`, `Controller.framePresses`
 

@@ -58,6 +58,7 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
     private EnemyKey? combatKey;
     private long revivalStartedAt;
     private long reviveKeyAt;
+    private long lastRevivePress;
     private long secondRevivalAt;
     private int revivalStep;
     private Hero? testedHero;
@@ -334,7 +335,16 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
             revivalStartedAt = Stopwatch.GetTimestamp();
             testedHero = hero;
             if (host)
-                hero.kill();
+            {
+                // Start below the game's one-hit protection threshold.
+                hero.setLifeAndRally(1, 0);
+                var damage = hero.maxLife;
+                var attack = new AttackData().init(hero, (double)damage);
+                attack.lastHitTarget = hero;
+                attack.finalDmg = damage;
+                attack.hitResult = new dc.HitResult.Normal();
+                hero.applyAttackResult(attack);
+            }
         }
 
         var down = revival.IsDown(hero);
@@ -353,8 +363,8 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
                 revivalStep = 1;
                 break;
             case 0 when !host && remote.Downed > 0 && players.PartnerShowsDowned:
-                PressRevive();
-                revivalStep = 1;
+                if (TryPressRevive(hero, local, remote))
+                    revivalStep = 1;
                 break;
             case 1 when host && revived:
                 report("COOP_QA REVIVAL HostRevived=True");
@@ -365,9 +375,12 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
                 hero.kill();
                 revivalStep = 2;
                 break;
+            case 1 when !host && remote.Downed > 0:
+                TryPressRevive(hero, local, remote);
+                break;
             case 2 when host && remote.Downed > 0 && players.PartnerShowsDowned:
-                PressRevive();
-                revivalStep = 3;
+                if (TryPressRevive(hero, local, remote))
+                    revivalStep = 3;
                 break;
             case 2 when !host && revived:
                 report("COOP_QA REVIVAL ClientRevived=True");
@@ -377,6 +390,9 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
                 report("COOP_QA REVIVAL ClientRevived=True");
                 secondRevivalAt = Stopwatch.GetTimestamp();
                 revivalStep = 4;
+                break;
+            case 3 when host && remote.Downed > 0:
+                TryPressRevive(hero, local, remote);
                 break;
             case 4 when host && Stopwatch.GetElapsedTime(secondRevivalAt).TotalMilliseconds >= 2600:
                 hero.kill();
@@ -389,7 +405,8 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
             case 5 when down && remote.Downed > 0:
                 revivalStep = 6;
                 break;
-            case 6 when revived && remote.Downed == 0 && !players.PartnerShowsDowned:
+            case 6 when revived && !hero.controlsLocked(Ref<bool>.Null) &&
+                             remote.Downed == 0 && !players.PartnerShowsDowned:
                 report("COOP_QA REVIVAL BothRecovered=True SameHero=True");
                 Complete(hero, local);
                 return;
@@ -399,15 +416,27 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         {
             finished = true;
             report($"COOP_QA FAIL: revival step={revivalStep} localDown={down} partnerDown={remote.Downed}" +
-                $" partnerOutline={players.PartnerShowsDowned} health={hero.life}/{hero.maxLife}."
-            );
+                $" partnerOutline={players.PartnerShowsDowned} health={hero.life}/{hero.maxLife}" +
+                $" locked={hero.controlsLocked(Ref<bool>.Null)} awake={hero.awake} unconscious={hero.isUnconscious()}" +
+                $" cinematic={hero._level.game.curCine?.GetType().Name ?? "none"} distance=({local.X - remote.X:F1},{local.Y - remote.Y:F1}).");
         }
     }
 
-    private void PressRevive()
+    private bool TryPressRevive(Hero hero, PlayerState local, PlayerState remote)
     {
+        if (hero.controlsLocked(Ref<bool>.Null) || Stopwatch.GetElapsedTime(lastRevivePress).TotalMilliseconds < 500)
+            return false;
+        if (Math.Abs(local.X - remote.X) > 48 || Math.Abs(local.Y - remote.Y) > 48)
+        {
+            hero.setPosPixel(remote.X, remote.Y);
+            hero.cancelVelocities();
+            hero.updatePositionXY();
+            hero.spriteUpdate();
+            return false;
+        }
         NormalPlayQa.Dispatch(82, new dc.hxd.EventKind.EKeyDown());
-        reviveKeyAt = Stopwatch.GetTimestamp();
+        lastRevivePress = reviveKeyAt = Stopwatch.GetTimestamp();
+        return true;
     }
 
     private void Complete(Hero hero, PlayerState local)

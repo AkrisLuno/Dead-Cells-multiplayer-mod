@@ -35,6 +35,9 @@ internal sealed class NativeRevival
             if (!TryDown(hero))
                 original(hero);
         };
+        // Preserve native damage protections and intercept the solo continue cinematic.
+        Hook_Hero.checkContinueMode += (original, hero, attack) =>
+            (hero.life <= 0 && TryDown(hero)) || original(hero, attack);
         Hook_Entity.kill += (original, entity) =>
         {
             if (entity is not Hero hero || !TryDown(hero))
@@ -46,8 +49,11 @@ internal sealed class NativeRevival
             !IsProtected(hero) && original(hero, attack);
         Hook_Hero.applyAttackResult += (original, hero, attack) =>
         {
-            if (!IsProtected(hero))
-                original(hero, attack);
+            if (IsProtected(hero))
+                return;
+            original(hero, attack);
+            if (hero.life <= 0)
+                TryDown(hero);
         };
         Hook_Hero.updateInteraction += (original, hero) =>
         {
@@ -70,7 +76,7 @@ internal sealed class NativeRevival
 
     private bool TryDown(Hero hero)
     {
-        if (!hasPartner || hero._level is null || !ReferenceEquals(hero, Game.Class.ME?.hero))
+        if (!hasPartner || hero.destroyed || hero._level is null || !ReferenceEquals(hero, Game.Class.ME?.hero))
             return false;
         if (IsDown(hero))
         {
@@ -107,6 +113,8 @@ internal sealed class NativeRevival
             return local;
         if (downed is not null && !ReferenceEquals(hero, downed))
             downed = null;
+        if (!IsDown(hero) && hero.life <= 0)
+            TryDown(hero);
         if (IsDown(hero))
         {
             hero.lockControlsS(1);
