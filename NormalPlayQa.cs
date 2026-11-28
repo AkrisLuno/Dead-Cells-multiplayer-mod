@@ -471,7 +471,7 @@ internal sealed class NormalPlayQa(Action<string> report, string mode)
         held = 0;
     }
 
-    private static void Dispatch(int key, EventKind kind)
+    internal static void Dispatch(int key, EventKind kind)
     {
         var input = new Event(kind, Ref<double>.Null, Ref<double>.Null) { keyCode = key };
         Window.Class.getInstance.Invoke().@event(input);

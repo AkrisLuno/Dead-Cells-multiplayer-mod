@@ -50,7 +50,7 @@ internal sealed class NativeExits
         log($"Exit ready: {level} ({door.X},{door.Y}) to {door.Destination}.");
     }
 
-    internal void Update(Hero? hero, PeerState? peer)
+    internal void Update(Hero? hero, PeerState? peer, bool downed)
     {
         if (Decision is null)
             return;
@@ -69,7 +69,7 @@ internal sealed class NativeExits
             return;
         }
 
-        if (!sameLevel || selected is null || selected.destroyed || hero is null ||
+        if (downed || !sameLevel || selected is null || selected.destroyed || hero is null ||
             Math.Abs(hero.cx - door.X) > 3 || Math.Abs(hero.cy - door.Y) > 3)
         {
             Decision = null;

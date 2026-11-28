@@ -12,7 +12,7 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class LanSession : IDisposable
 {
-    private const int ProtocolVersion = 12;
+    private const int ProtocolVersion = 13;
     private const int MaximumFrameBytes = 640 * 1024;
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
     private readonly CancellationTokenSource shutdown = new();
@@ -299,9 +299,11 @@ internal sealed record PlayerState(string Level, double X, double Y, int Directi
     public MovementSound[]? Sounds { get; init; }
     public PlayerEffect[]? Effects { get; init; }
     public EquipmentVisual[]? Equipment { get; init; }
+    public int Downed { get; init; }
+    public int ReviveFor { get; init; }
 
     internal bool IsValid => Level?.Length is > 0 and <= 96 &&
-                             Animation is "idle" or "run" or "jump" or "fall" &&
+                             Animation is "idle" or "run" or "jump" or "fall" && Downed >= 0 && ReviveFor >= 0 &&
                              (SpriteGroup is null || SpriteGroup.Length is > 0 and <= 80) && Opacity is >= 0 and <= 1 &&
                              (Sounds is null || Sounds.Length <= MovementSound.MaxCues &&
                               Array.TrueForAll(Sounds, sound => sound is { IsValid: true })) &&

@@ -20,6 +20,8 @@ internal sealed class NativePlayers
     private string? previousAnimation;
     private (string? Group, string? Fallback) previousPose;
     private const int PartnerOutline = 0x62D9FF;
+    private const int DownedOutline = 0xFFC477;
+    private bool partnerDown;
     private LevelMap? lastMap;
     private ulong layout;
     private Guid remoteId;
@@ -114,6 +116,7 @@ internal sealed class NativePlayers
             replica.colLayer = 0;
             replica.isAlwaysUpdated = true;
             replica.setOutlineColor(PartnerOutline);
+            partnerDown = false;
             previousAnimation = null;
             previousPose = default;
             log($"Remote player spawned in {state.Level}.");
@@ -124,6 +127,12 @@ internal sealed class NativePlayers
         replica.setPosPixel(pose.X, pose.Y);
         replica.dir = pose.Direction;
         replica.visible = true;
+        var down = pose.Downed > 0;
+        if (down != partnerDown)
+        {
+            partnerDown = down;
+            replica.setOutlineColor(down ? DownedOutline : PartnerOutline);
+        }
         if (previousPose != (pose.SpriteGroup, pose.Animation) &&
             replica.spr is { _animManager: { } animations, lib.groups: { } groups })
         {
@@ -137,7 +146,7 @@ internal sealed class NativePlayers
         }
         replica.spriteUpdate();
         if (replica.spr is { } sprite)
-            sprite.alpha = pose.Opacity;
+            sprite.alpha = down ? 0.5 * pose.Opacity : pose.Opacity;
         equipment.Render(level!, pose.Equipment);
         if (Stopwatch.GetElapsedTime(receivedAt, now).TotalMilliseconds <= 350)
         {
@@ -155,6 +164,7 @@ internal sealed class NativePlayers
     internal bool ReplicaShowsPartner(PlayerState state) =>
         replica is { destroyed: false, outlineColor: PartnerOutline } && replica.dir == state.Direction &&
         previousAnimation is not null;
+    internal bool PartnerShowsDowned => partnerDown && replica is { destroyed: false, outlineColor: DownedOutline };
     internal string? ReplicaAnimation => replica?.spr?.groupName?.ToString();
     internal int RemoteSounds => audio.Played;
     internal string? LastRemoteSound => audio.LastAsset;

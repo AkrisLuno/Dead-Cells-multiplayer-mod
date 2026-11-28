@@ -21,6 +21,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
     private NativeShops? shops;
     private NativeLoot? loot;
     private NativeEnemies? enemies;
+    private NativeRevival? revival;
     private IPEndPoint? endpoint;
     private bool host;
     private int runSeed;
@@ -85,9 +86,10 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         loot = new NativeLoot(host, () => runSeed != 0, message => Logger.Warning("{DropState}", message));
         loot.Install();
         enemies = new NativeEnemies(host, () => runSeed != 0, players);
+        revival = new NativeRevival(host, message => Logger.Information("{Revival}", message));
 #if COOP_QA
         var qaMode = Environment.GetEnvironmentVariable("DEAD_CELLS_COOP_QA");
-        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal" or "effects" or "equipment" or "summons" or "combat")
+        if (qaMode is "1" or "exit" or "shop" or "loot" or "presentation" or "normal" or "effects" or "equipment" or "summons" or "combat" or "revive")
         {
             options.masterVolume = 0;
             options.applyVolumes();
@@ -104,7 +106,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         if (qa?.CheckForShutdown() == true)
             return;
 #endif
-        if (session is null || players is null || exits is null || shops is null || loot is null || enemies is null)
+        if (session is null || players is null || exits is null || shops is null || loot is null || enemies is null || revival is null)
             return;
 
         var (seed, peerId, snapshot) = session.ObservePeer();
@@ -145,7 +147,8 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         players.Update(hero, remote?.Player, snapshot?.At ?? 0, peerId);
         if (snapshot is not { IsFresh: true })
             remote = null;
-        exits.Update(hero, remote);
+        player = revival.Update(hero, player, remote?.Player);
+        exits.Update(hero, remote, player is { Downed: > 0 } || remote?.Player is { Downed: > 0 });
         shops.Update(hero, remote);
         loot.Update(hero, player, remote);
         var combat = enemies.Update(hero, player, remote);
@@ -157,7 +160,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
         session.Publish(player, exits.Decision, new LobbyState(ready, host && launchRequested),
             shops.Request, shops.Stocks, loot.Frame, receipt, combat);
 #if COOP_QA
-        qa?.Tick(hero, remote?.Player, players, loot, enemies);
+        qa?.Tick(hero, remote?.Player, players, loot, enemies, revival);
 #endif
     }
 

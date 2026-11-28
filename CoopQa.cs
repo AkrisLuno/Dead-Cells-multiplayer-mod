@@ -56,10 +56,20 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
     private long clientHitSeenAt;
     private int combatStep;
     private EnemyKey? combatKey;
+    private long revivalStartedAt;
+    private long reviveKeyAt;
+    private long secondRevivalAt;
+    private int revivalStep;
+    private Hero? testedHero;
 
     internal bool CheckForShutdown()
     {
         normal?.UpdateInput();
+        if (reviveKeyAt != 0 && Stopwatch.GetElapsedTime(reviveKeyAt).TotalMilliseconds >= 150)
+        {
+            NormalPlayQa.Dispatch(82, new dc.hxd.EventKind.EKeyUp());
+            reviveKeyAt = 0;
+        }
         var now = Stopwatch.GetTimestamp();
         if (stopSignal is null || now < nextShutdownCheck)
             return shutdownRequested != 0;
@@ -96,7 +106,8 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         return Stopwatch.GetElapsedTime(receiptAt).TotalMilliseconds >= 500 ? receipt : null;
     }
 
-    internal void Tick(Hero? hero, PlayerState? remote, NativePlayers players, NativeLoot loot, NativeEnemies enemies)
+    internal void Tick(Hero? hero, PlayerState? remote, NativePlayers players, NativeLoot loot, NativeEnemies enemies,
+        NativeRevival revival)
     {
         if (NativePlayers.Capture(hero) is not { } local)
             return;
@@ -134,6 +145,11 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         if (mode == "combat")
         {
             TickCombat(hero!, local, remote, enemies);
+            return;
+        }
+        if (mode == "revive")
+        {
+            TickRevival(hero!, local, remote, players, revival);
             return;
         }
 
@@ -306,6 +322,92 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
         attack.finalDmg = damage;
         attack.hitResult = new dc.HitResult.Normal();
         mob.applyAttackResult(attack);
+    }
+
+    private void TickRevival(Hero hero, PlayerState local, PlayerState remote, NativePlayers players, NativeRevival revival)
+    {
+        if (revivalStartedAt == 0)
+        {
+            if (hero.controlsLocked(Ref<bool>.Null) || !players.ReplicaAt(remote) ||
+                Math.Abs(local.X - remote.X) > 48 || Math.Abs(local.Y - remote.Y) > 48)
+                return;
+            revivalStartedAt = Stopwatch.GetTimestamp();
+            testedHero = hero;
+            if (host)
+                hero.kill();
+        }
+
+        var down = revival.IsDown(hero);
+        var revived = !down && hero.life == Math.Max(1, (int)((long)hero.maxLife * 30 / 100));
+        var freshMatch = ReferenceEquals(hero, testedHero) && !hero.destroyed;
+        if (!freshMatch || (down && (!hero.controlsLocked(Ref<bool>.Null) || hero.life != 1)))
+        {
+            finished = true;
+            report($"COOP_QA FAIL: downed hero state SameHero={freshMatch} Locked={hero.controlsLocked(Ref<bool>.Null)} Life={hero.life}.");
+            return;
+        }
+
+        switch (revivalStep)
+        {
+            case 0 when host && down:
+                revivalStep = 1;
+                break;
+            case 0 when !host && remote.Downed > 0 && players.PartnerShowsDowned:
+                PressRevive();
+                revivalStep = 1;
+                break;
+            case 1 when host && revived:
+                report("COOP_QA REVIVAL HostRevived=True");
+                revivalStep = 2;
+                break;
+            case 1 when !host && remote.Downed == 0 && !players.PartnerShowsDowned:
+                report("COOP_QA REVIVAL HostRevived=True");
+                hero.kill();
+                revivalStep = 2;
+                break;
+            case 2 when host && remote.Downed > 0 && players.PartnerShowsDowned:
+                PressRevive();
+                revivalStep = 3;
+                break;
+            case 2 when !host && revived:
+                report("COOP_QA REVIVAL ClientRevived=True");
+                revivalStep = 4;
+                break;
+            case 3 when host && remote.Downed == 0 && !players.PartnerShowsDowned:
+                report("COOP_QA REVIVAL ClientRevived=True");
+                secondRevivalAt = Stopwatch.GetTimestamp();
+                revivalStep = 4;
+                break;
+            case 4 when host && Stopwatch.GetElapsedTime(secondRevivalAt).TotalMilliseconds >= 2600:
+                hero.kill();
+                revivalStep = 5;
+                break;
+            case 4 when !host && remote.Downed > 0 && players.PartnerShowsDowned:
+                hero.kill();
+                revivalStep = 5;
+                break;
+            case 5 when down && remote.Downed > 0:
+                revivalStep = 6;
+                break;
+            case 6 when revived && remote.Downed == 0 && !players.PartnerShowsDowned:
+                report("COOP_QA REVIVAL BothRecovered=True SameHero=True");
+                Complete(hero, local);
+                return;
+        }
+
+        if (Stopwatch.GetElapsedTime(revivalStartedAt).TotalSeconds > 30)
+        {
+            finished = true;
+            report($"COOP_QA FAIL: revival step={revivalStep} localDown={down} partnerDown={remote.Downed}" +
+                $" partnerOutline={players.PartnerShowsDowned} health={hero.life}/{hero.maxLife}."
+            );
+        }
+    }
+
+    private void PressRevive()
+    {
+        NormalPlayQa.Dispatch(82, new dc.hxd.EventKind.EKeyDown());
+        reviveKeyAt = Stopwatch.GetTimestamp();
     }
 
     private void Complete(Hero hero, PlayerState local)
