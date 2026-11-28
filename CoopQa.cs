@@ -1,0 +1,382 @@
+#if COOP_QA
+using System;
+using System.Diagnostics;
+using File = System.IO.File;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text.Json;
+using dc.en;
+using dc.en.inter;
+using dc.en.loot;
+using dc.hl.types;
+using dc.level;
+using dc.tool;
+using HaxeProxy.Runtime;
+using ModCore.Utilities;
+
+namespace DeadCellsMultiplayerMod;
+
+internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<string> report)
+{
+    private static readonly string[] TestWeaponIds = ["RustySword", "TwinDaggers", "BloodSword", "Bow", "WoodShield",
+        "BroadSword", "Torch", "IceBow", "Shovel", "Rapier", "BalancedBlade", "AssassinDagger"];
+    private PlayerState? beginning;
+    private PlayerState? remoteBeginning;
+    private long readyAt;
+    private long movedAt;
+    private double targetX;
+    private bool moved;
+    private bool finished;
+    private bool holdPoseAfterPass;
+    private long lastProbe;
+    private bool movementPassed;
+    private int exitX;
+    private int exitY;
+    private long nextShutdownCheck;
+    private long shutdownRequested;
+    private ShopReroll? testShop;
+    private ShopKey? shopKey;
+    private int lastObservedUses = 2;
+    private bool sentRoll;
+    private long lootQueuedAt;
+    private long receiptAt;
+    private int dropX;
+    private int dropY;
+    private string? dropWeapon;
+    private string? dropFood;
+    private long pickedAt;
+    private int moneyBeforePickup;
+
+    internal bool CheckForShutdown()
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (stopSignal is null || now < nextShutdownCheck)
+            return shutdownRequested != 0;
+        nextShutdownCheck = now + Stopwatch.Frequency / 4;
+        if (!File.Exists(stopSignal))
+            return false;
+
+        if (shutdownRequested == 0)
+        {
+            shutdownRequested = now;
+            report("COOP_QA closing game.");
+        }
+
+        // The native save/quit hook may defer closure during a transition.
+        if (dc.Main.Class.ME.onExit() || Stopwatch.GetElapsedTime(shutdownRequested, now).TotalSeconds >= 5)
+            dc.hxd.System.Class.exit.Invoke();
+        return true;
+    }
+
+    internal DropReceipt? OutgoingReceipt(DropReceipt? receipt)
+    {
+        if (mode != "loot" || receipt is null)
+            return receipt;
+        if (receiptAt == 0)
+            receiptAt = Stopwatch.GetTimestamp();
+        return Stopwatch.GetElapsedTime(receiptAt).TotalMilliseconds >= 500 ? receipt : null;
+    }
+
+    internal void Tick(Hero? hero, PlayerState? remote, NativePlayers players, NativeLoot loot)
+    {
+        if (NativePlayers.Capture(hero) is not { } local)
+            return;
+        if (finished)
+        {
+            if (holdPoseAfterPass && local.Level == beginning!.Level)
+                HoldPose(hero!, local);
+            return;
+        }
+        if (remote is null || local.Level != remote.Level)
+            return;
+
+        if (mode == "shop")
+        {
+            TickShop(hero!, local, remote);
+            return;
+        }
+        if (mode == "loot")
+        {
+            TickLoot(hero!, local, loot);
+            return;
+        }
+
+        if (movementPassed)
+        {
+            if (local.Level != beginning!.Level && players.ReplicaAt(remote))
+                Complete(hero!, local);
+            return;
+        }
+
+        if (beginning is null || remoteBeginning is null)
+        {
+            if (!players.ReplicaAt(remote))
+                return;
+            beginning = local;
+            remoteBeginning = remote;
+            readyAt = Stopwatch.GetTimestamp();
+            report(FormattableString.Invariant($"COOP_QA ready. Local=({local.X:F1},{local.Y:F1}) Remote=({remote.X:F1},{remote.Y:F1})"));
+            return;
+        }
+
+        if (!moved && Stopwatch.GetElapsedTime(readyAt).TotalSeconds >= 2)
+        {
+            targetX = local.X + (host ? 24 : 48);
+            moved = true;
+            movedAt = Stopwatch.GetTimestamp();
+            report(FormattableString.Invariant($"COOP_QA moving toward X={targetX:F1}."));
+            return;
+        }
+
+        if (!moved)
+            return;
+
+        // Keep the scripted pose until both clients have had time to receive it.
+        HoldPose(hero!, local);
+
+        var close = players.ReplicaAt(remote);
+        if (Math.Abs(local.X - beginning.X) < 5 || Math.Abs(remote.X - remoteBeginning.X) < 5 || !close)
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (Stopwatch.GetElapsedTime(lastProbe, now).TotalSeconds >= 4)
+            {
+                lastProbe = now;
+                report(FormattableString.Invariant($"COOP_QA waiting. Local=({local.X:F1},{local.Y:F1}) Remote=({remote.X:F1},{remote.Y:F1}) ReplicaNear={close}"));
+            }
+            return;
+        }
+        if (Stopwatch.GetElapsedTime(movedAt).TotalSeconds < 2)
+            return;
+
+        if (mode != "exit")
+        {
+            holdPoseAfterPass = true;
+            Complete(hero!, local);
+            return;
+        }
+
+        var entities = hero!._level.entities;
+        Exit? door = null;
+        for (var i = 0; i < entities.length; i++)
+        {
+            if (entities.getDyn(i) is not Exit { destroyed: false } candidate ||
+                string.IsNullOrEmpty(candidate.destLevel?.ToString()))
+                continue;
+            if (door is null || candidate.cx < door.cx || candidate.cx == door.cx && candidate.cy < door.cy)
+                door = candidate;
+        }
+
+        if (door is null)
+        {
+            finished = true;
+            report($"COOP_QA FAIL: no normal exit in {local.Level}.");
+            return;
+        }
+
+        movementPassed = true;
+        exitX = door.cx;
+        exitY = door.cy;
+        hero.setPosCase(exitX, exitY, 0.5, 0.9);
+        report($"COOP_QA activating exit ({exitX},{exitY}) to {door.destLevel}.");
+        door.onActivate(hero, true);
+    }
+
+    private void Complete(Hero hero, PlayerState local)
+    {
+        finished = true;
+        report($"COOP_QA PASS Level={local.Level} Seed={hero._level.game.data.gameSeed}");
+    }
+
+    private void TickShop(Hero hero, PlayerState local, PlayerState remote)
+    {
+        if (testShop is null)
+        {
+            var level = hero._level;
+            var room = level.map.getRoomAt(hero.cx, hero.cy);
+            if (room is null || room.wid < 14)
+                return;
+            // The native helper creates the concrete HashLink stock records used by ShopReroll.
+            var generator = HaxeProxyUtils.AsHaxe<LootGen>(HaxeProxyUtils.GetHashlinkType(typeof(LootGen)).CreateInstance());
+            var pool = (ArrayObj)level.entities.slice(0, 0);
+            var available = TestWeaponIds.Select(id => id.AsHaxeString())
+                .Where(id => dc.Data.Class.item.byId.get(id) is not null).Take(3).ToArray();
+            for (var itemLevel = 2; itemLevel <= 3; itemLevel++)
+            {
+                foreach (var name in available)
+                {
+                    var item = new InventItem(new InventItemKind.Weapon(name));
+                    item.setItemLevel(itemLevel);
+                    generator._addToShop(pool, item, null, null);
+                }
+            }
+            if (pool.length != 6)
+            {
+                finished = true;
+                report($"COOP_QA FAIL: shop fixture created {pool.length} of 6 items.");
+                return;
+            }
+            if (!host)
+                pool.reverse();
+            room.merchant = new MerchantData(new MerchantType.Weapons(), pool, false);
+            testShop = new ShopReroll(level, room.x + 10, hero.cy, room.x + 1);
+            testShop.remainUses = 2;
+            testShop.init();
+            shopKey = NativeShops.GetKey(level, testShop);
+            if (shopKey is null)
+            {
+                finished = true;
+                report("COOP_QA FAIL: shop fixture is outside its room.");
+                return;
+            }
+            report($"COOP_QA shop ready room={shopKey.Room} at ({shopKey.X},{shopKey.Y}).");
+        }
+
+        var key = shopKey!;
+        hero.setPosCase(key.X, key.Y, 0.5, 0.5);
+        if (Math.Abs(remote.X / 24 - key.X) > 2 || Math.Abs(remote.Y / 24 - key.Y) > 2)
+            return;
+
+        if (testShop.remainUses < lastObservedUses && NativeShops.CaptureBooths(hero._level, key.Room) is { Length: 3 } currentStock)
+        {
+            lastObservedUses = testShop.remainUses;
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(currentStock);
+            var hash = Convert.ToHexString(SHA256.HashData(bytes));
+            report($"COOP_QA SHOP Revision={2 - lastObservedUses} Uses={lastObservedUses} Stock={hash}");
+            if (lastObservedUses == 0)
+            {
+                Complete(hero, local);
+                return;
+            }
+        }
+
+        if (!sentRoll && lastObservedUses == (host ? 2 : 1))
+        {
+            sentRoll = true;
+            testShop.onActivate(hero, true);
+        }
+    }
+
+    private void HoldPose(Hero hero, PlayerState local)
+    {
+        if (Math.Abs(local.X - targetX) <= 2)
+            return;
+        hero.setPosPixel(targetX, local.Y);
+        hero.updatePositionXY();
+        hero.spriteUpdate();
+    }
+
+    private void TickLoot(Hero hero, PlayerState local, NativeLoot loot)
+    {
+        var level = hero._level;
+        if (lootQueuedAt == 0)
+        {
+            var weapon = TestWeaponIds.Select(id => id.AsHaxeString())
+                .FirstOrDefault(id => dc.Data.Class.item.byId.get(id) is not null);
+            var nativeFood = LootGen.Class.getSmallHealingKind.Invoke();
+            var food = new[] { nativeFood, "SmallFood".AsHaxeString(), "Chicken".AsHaxeString(), "Croissant".AsHaxeString() }
+                .FirstOrDefault(id => id is not null && dc.Data.Class.item.byId.get(id) is not null);
+            if (weapon is null || food is null)
+            {
+                finished = true;
+                report($"COOP_QA FAIL: missing native loot fixture Weapon={weapon} Food={food} DefaultFood={nativeFood}.");
+                return;
+            }
+            dropWeapon = weapon.ToString();
+            dropFood = food.ToString();
+            dropX = Math.Clamp(hero.cx + 9, 4, level.map.wid - 5);
+            dropY = Math.Clamp(level.map.getGroundY(dropX, hero.cy), 2, level.map.hei - 2);
+            var drops = (ArrayObj)level.entities.slice(0, 0);
+            if (host)
+            {
+                drops.pushDyn(new dc.LootType.MoneyGold(371));
+                drops.pushDyn(new dc.LootType.MoneyGem(317));
+                drops.pushDyn(new dc.LootType.GenericCell());
+                drops.pushDyn(new dc.LootType.HealDrop(0.25));
+                var item = new InventItem(new InventItemKind.Weapon(weapon));
+                item.setItemLevel(7);
+                drops.pushDyn(new dc.LootType.InvItem(item));
+                drops.pushDyn(new dc.LootType.InvItem(new InventItem(new InventItemKind.Consumable(food))));
+                level.dropMobLoots(dropX, dropY, drops, 2.0);
+                var duplicateValues = (ArrayObj)level.entities.slice(0, 0);
+                duplicateValues.pushDyn(new dc.LootType.MoneyGold(371));
+                level.dropMobLoots(dropX, dropY, duplicateValues, 2.0);
+            }
+            else
+            {
+                drops.pushDyn(new dc.LootType.MoneyGold(913));
+                level.dropMobLoots(dropX, dropY, drops, 2.0);
+            }
+            report($"COOP_QA loot queued at ({dropX},{dropY}). NativeQueue={level.newLoots.length}.");
+            lootQueuedAt = Stopwatch.GetTimestamp();
+            return;
+        }
+
+        if (Stopwatch.GetElapsedTime(lootQueuedAt).TotalSeconds < 2 ||
+            (host ? loot.Frame is not null : loot.Receipt?.Sequence != 2))
+            return;
+
+        var ore = 0;
+        GoldOre? oreToPick = null;
+        var gem = 0;
+        var cell = 0;
+        var heal = 0;
+        var weaponCount = 0;
+        var foodCount = 0;
+        var clientOnly = 0;
+        var entities = level.entities;
+        for (var i = 0; i < entities.length; i++)
+        {
+            switch (entities.getDyn(i))
+            {
+                case GoldOre { destroyed: false, value: 371 } gold:
+                    ore++;
+                    oreToPick = gold;
+                    break;
+                case Gem { destroyed: false, value: 317 }: gem++; break;
+                case GenericCell { destroyed: false } entity when Math.Abs(entity.cx - dropX) <= 12: cell++; break;
+                case HealDrop { destroyed: false, healPct: 0.25 }: heal++; break;
+                case GoldOre { destroyed: false, value: 913 }: clientOnly++; break;
+                case ItemDrop { destroyed: false } entity when Math.Abs(entity.cx - dropX) <= 12:
+                    var id = entity.item.getItemKind()?.ToString();
+                    if (id == dropWeapon && entity.item.getRawItemLevel() == 7)
+                        weaponCount++;
+                    if (id == dropFood)
+                        foodCount++;
+                    break;
+            }
+        }
+        var counts = $"Gold={ore} Gem={gem} Cells={cell} Heal={heal} Weapon={weaponCount} Food={foodCount} ClientOnly={clientOnly}";
+        if (pickedAt != 0)
+        {
+            if (Stopwatch.GetElapsedTime(pickedAt).TotalMilliseconds < 500)
+                return;
+            var received = level.game.data.money - moneyBeforePickup;
+            var orePaid = received - (gem == 0 ? 317 : 0);
+            if (orePaid != 371 || ore != 1 || gem > 1)
+            {
+                finished = true;
+                report($"COOP_QA FAIL: pickup paid {received} and left {ore} ores and {gem} gems.");
+                return;
+            }
+            report($"COOP_QA PICKUP Paid={orePaid} RemainingGold={ore}");
+            Complete(hero, local);
+            return;
+        }
+        if (ore != 2 || gem != 1 || cell != 1 || heal != 1 || weaponCount != 1 || foodCount != 1 || clientOnly != 0)
+        {
+            if (Stopwatch.GetElapsedTime(lootQueuedAt).TotalSeconds < 12 && clientOnly == 0)
+                return;
+            finished = true;
+            var nearby = Enumerable.Range(0, entities.length).Select(entities.getDyn).OfType<Loot>()
+                .Where(entity => !entity.destroyed).Take(25).Select(entity => $"{entity.GetType().Name}@{entity.cx},{entity.cy}");
+            report($"COOP_QA FAIL: loot counts {counts} NativeQueue={level.newLoots.length}. Observed {string.Join(" ", nearby)}.");
+            return;
+        }
+        report($"COOP_QA LOOT {counts}");
+        moneyBeforePickup = level.game.data.money;
+        oreToPick!.setPosCase(hero.cx, hero.cy, hero.xr, hero.yr);
+        oreToPick.pickUpdate();
+        pickedAt = Stopwatch.GetTimestamp();
+    }
+}
+#endif
