@@ -1,5 +1,0 @@
-<Project>
-  <PropertyGroup Condition="'$(DCCM_MDK_ROOT)' != '' and Exists('$(DCCM_MDK_ROOT)/packages')">
-    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(DCCM_MDK_ROOT)/packages</RestoreAdditionalProjectSources>
-  </PropertyGroup>
-</Project>
