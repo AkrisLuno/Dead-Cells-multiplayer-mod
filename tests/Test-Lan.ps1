@@ -197,6 +197,7 @@ try {
     if ($VerifyEnemyTarget) {
         (Wait-ForGameLog $instances.Host 'COOP_QA ENEMY_TARGET HostTarget=True StrikeAcknowledged=True' $deadline).Line
         (Wait-ForGameLog $instances.Client 'COOP_QA ENEMY_TARGET ClientHealthBefore=\d+ After=\d+' $deadline).Line
+        (Wait-ForGameLog $instances.Client 'COOP_QA ENEMY_TARGET ProjectileVisible=True ClientHealthBefore=\d+ After=\d+' $deadline).Line
     }
     if ($VerifyBoss) {
         foreach ($side in 'Host', 'Client') {

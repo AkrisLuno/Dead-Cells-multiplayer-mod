@@ -57,6 +57,8 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
     private int combatStep;
     private EnemyKey? combatKey;
     private Zombie? attackingZombie;
+    private dc.en.bu.BoneThrowerBullet? hostileProjectile;
+    private long hostileProjectileAt;
     private int initialCombatLife;
     private bool zombieTargetedGuest;
     private bool testedNativeStrike;
@@ -365,13 +367,49 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
             zombieTargetedGuest = ReferenceEquals(attackingZombie.aTarget, guest);
             AttackUtils.Class.createFromMobAndHit.Invoke(attackingZombie, 11.0, null, guest);
         }
+        if (host && enemies.GuestStrikeReceipt == 1 && players.Partner is { _targetable: true } target &&
+            Stopwatch.GetElapsedTime(combatStartedAt).TotalSeconds >= 6)
+        {
+            if (hostileProjectile is null)
+            {
+                var x = (target.cx + target.xr) * 24 - 36;
+                var y = (target.cy + target.yr) * 24 - 24;
+                attackingZombie!.setPosPixel(x, y + 24);
+                attackingZombie.updatePositionXY();
+                attackingZombie.dir = 1;
+                var attack = AttackUtils.Class.createFromMob.Invoke(attackingZombie, 13.0, null);
+                hostileProjectile = new dc.en.bu.BoneThrowerBullet(attackingZombie, attack, 0, 0.01);
+                if (!hostileProjectile.initDone)
+                    hostileProjectile.init();
+                hostileProjectile.initOrigin(x, y);
+                hostileProjectile.updatePositionXY();
+                hostileProjectile.spriteUpdate();
+                hostileProjectile.hasGravity = false;
+                hostileProjectile.ignoreWalls = true;
+                hostileProjectile.ignoreOneWays = true;
+                hostileProjectileAt = Stopwatch.GetTimestamp();
+            }
+            else if (enemies.GuestStrikes == 1 && !hostileProjectile.destroyed &&
+                     Stopwatch.GetElapsedTime(hostileProjectileAt).TotalMilliseconds >= 300)
+            {
+                hostileProjectile.onTouchValidTarget(target);
+            }
+        }
+        if (!host && combatStep == 0 && enemies.GuestStrikes == 1 && hero.life > 0 && hero.life < initialCombatLife)
+        {
+            report($"COOP_QA ENEMY_TARGET ClientHealthBefore={initialCombatLife} After={hero.life}");
+            initialCombatLife = hero.life;
+            combatStep = 1;
+        }
         var passed = host
-            ? zombieTargetedGuest && enemies.GuestStrikes > 0 && enemies.GuestStrikeReceipt > 0 && hero.life == initialCombatLife
-            : enemies.GuestStrikes > 0 && hero.life > 0 && hero.life < initialCombatLife;
+            ? zombieTargetedGuest && enemies.GuestStrikeReceipt >= 2 && hero.life == initialCombatLife &&
+              players.Equipment.CapturedHostileProjectile
+            : combatStep == 1 && enemies.GuestStrikes >= 2 && hero.life > 0 && hero.life < initialCombatLife &&
+              players.Equipment.Rendered.Contains(EquipmentKind.Projectile);
         if (passed)
         {
             report(host ? "COOP_QA ENEMY_TARGET HostTarget=True StrikeAcknowledged=True" :
-                $"COOP_QA ENEMY_TARGET ClientHealthBefore={initialCombatLife} After={hero.life}");
+                $"COOP_QA ENEMY_TARGET ProjectileVisible=True ClientHealthBefore={initialCombatLife} After={hero.life}");
             Complete(hero, local);
         }
         else if (Stopwatch.GetElapsedTime(combatStartedAt).TotalSeconds > 12)
@@ -381,7 +419,10 @@ internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<
                 $" targetable={players.Partner?._targetable} mob=({attackingZombie?.cx},{attackingZombie?.cy})" +
                 $" client=({remote.X / 24:F2},{remote.Y / 24:F2}) strike={enemies.GuestStrikes}" +
                 $" received={enemies.GuestStrikeReceipt} life={hero.life}/{initialCombatLife}" +
-                $" guestOnTeam={players.Partner?._team?.members?.length}.");
+                $" guestOnTeam={players.Partner?._team?.members?.length}" +
+                $" projectile={hostileProjectile?.destroyed}/{players.Equipment.CapturedHostileProjectile}" +
+                $" projectileRendered={players.Equipment.Rendered.Contains(EquipmentKind.Projectile)}" +
+                $" strikeResult={enemies.GuestStrikeTrace}.");
         }
     }
 

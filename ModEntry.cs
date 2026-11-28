@@ -78,7 +78,7 @@ public sealed class ModEntry(ModInfo info) : ModBase(info), IOnGameEndInit, IOnF
             return;
 
         session = new LanSession(host, endpoint, message => Logger.Information("{LanState}", message));
-        players = new NativePlayers(message => Logger.Information("{PlayerState}", message));
+        players = new NativePlayers(host, message => Logger.Information("{PlayerState}", message));
         exits = new NativeExits(host, () => runSeed != 0, message => Logger.Information("{ExitState}", message));
         shops = new NativeShops(host, () => session?.RunSeed == runSeed && runSeed != 0 && !reportedLayoutMismatch,
             message => Logger.Information("{ShopState}", message));

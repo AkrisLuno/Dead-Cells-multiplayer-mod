@@ -4,6 +4,7 @@ using dc.en;
 using dc.hl.types;
 using dc.level;
 using dc.pr;
+using dc.tool.atk;
 using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod;
@@ -12,7 +13,7 @@ internal sealed class NativePlayers
 {
     private readonly Action<string> log;
     private readonly RemoteMotion motion = new();
-    private readonly NativeEquipmentVisuals equipment = new();
+    private readonly NativeEquipmentVisuals equipment;
     private readonly NativeMovementAudio audio;
     private readonly NativePlayerEffects effects;
     private KingSkin? replica;
@@ -26,9 +27,10 @@ internal sealed class NativePlayers
     private ulong layout;
     private Guid remoteId;
 
-    internal NativePlayers(Action<string> log)
+    internal NativePlayers(bool host, Action<string> log)
     {
         this.log = log;
+        equipment = new NativeEquipmentVisuals(host);
         audio = new NativeMovementAudio(equipment);
         effects = new NativePlayerEffects(equipment, audio);
         Hook_KingSkin.fixedUpdate += SkipReplicaSimulation;
@@ -37,6 +39,8 @@ internal sealed class NativePlayers
 
     internal dc.Entity? Partner => replica is { destroyed: false } ? replica : null;
     internal bool OwnsEquipment(dc.Entity? entity) => equipment.Owns(entity);
+    internal dc.en.Mob? HostileAttackSource(AttackData attack) =>
+        equipment.FindHostileSource(attack.source) ?? equipment.FindHostileSource(attack.carrier);
 
     internal void SetPartnerTargetable(Hero? hero, bool targetable)
     {

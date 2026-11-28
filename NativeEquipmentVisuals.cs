@@ -16,15 +16,17 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class NativeEquipmentVisuals
 {
-    private sealed class Owned(int id, EquipmentKind kind, long spawnedAt)
+    private sealed class Owned(int id, EquipmentKind kind, long spawnedAt, Mob? hostileSource)
     {
         internal int Id { get; } = id;
         internal EquipmentKind Kind { get; } = kind;
         internal long SpawnedAt { get; } = spawnedAt;
+        internal Mob? HostileSource { get; } = hostileSource;
         internal CompanionTrail? Trail { get; set; }
         internal long TrailAt { get; set; }
     }
     private sealed record Replica(HSprite Sprite, EquipmentVisual Pose, bool Appeared);
+    private readonly bool host;
     private readonly Dictionary<Entity, Owned> owned = new();
     private readonly Dictionary<int, Replica> replicas = new();
     private readonly List<(Level Level, EquipmentVisual Visual, long CapturedAt)> brief = [];
@@ -43,14 +45,16 @@ internal sealed class NativeEquipmentVisuals
     internal int CompanionArrivals { get; private set; }
     internal int CompanionRemovals { get; private set; }
     internal int CompanionTrails { get; private set; }
+    internal bool CapturedHostileProjectile { get; private set; }
 #endif
 
-    internal NativeEquipmentVisuals()
+    internal NativeEquipmentVisuals(bool host)
     {
+        this.host = host;
         Hook__Bullet.__constructor__ += (original, bullet, owner, attack, speed, distance, group) =>
         {
             original(bullet, owner, attack, speed, distance, group);
-            Track(bullet, Owns(owner) ? owner : attack?.source ?? owner, EquipmentKind.Projectile);
+            Track(bullet, owner, EquipmentKind.Projectile, attack?.source);
         };
         Hook__Grenade.__constructor__ += (original, grenade, owner, speed) =>
         {
@@ -119,14 +123,27 @@ internal sealed class NativeEquipmentVisuals
         };
     }
 
-    private void Track(Entity entity, Entity? owner, EquipmentKind kind)
+    private void Track(Entity entity, Entity? owner, EquipmentKind kind, Entity? attackSource = null)
     {
+        if (owned.ContainsKey(entity))
+            return;
         var localHero = Game.Class.ME?.hero;
-        if (localHero is not null && (ReferenceEquals(owner, localHero) || Owns(owner)) && !owned.ContainsKey(entity))
-            owned.Add(entity, new Owned(++nextId, kind, Stopwatch.GetTimestamp()));
+        var hostile = host && kind is EquipmentKind.Projectile or EquipmentKind.Grenade
+            ? FindHostileSource(owner) ?? FindHostileSource(attackSource) : null;
+        if (hostile is not null || localHero is not null &&
+            (ReferenceEquals(owner, localHero) || Owns(owner) || ReferenceEquals(attackSource, localHero) || Owns(attackSource)))
+            owned.Add(entity, new Owned(++nextId, kind, Stopwatch.GetTimestamp(), hostile));
     }
 
-    internal bool Owns(Entity? entity) => entity is not null && owned.ContainsKey(entity);
+    internal bool Owns(Entity? entity) => entity is not null &&
+        owned.TryGetValue(entity, out var identity) && identity.HostileSource is null;
+
+    internal Mob? FindHostileSource(Entity? entity)
+    {
+        if (entity is Mob mob && NativeEnemies.IsEnemy(mob))
+            return mob;
+        return entity is not null && owned.TryGetValue(entity, out var identity) ? identity.HostileSource : null;
+    }
 
     internal bool OwnsCompanion(Entity? entity) => entity is not null && owned.TryGetValue(entity, out var identity) &&
         identity.Kind == EquipmentKind.Companion;
@@ -150,6 +167,10 @@ internal sealed class NativeEquipmentVisuals
             if (objects.Count >= EquipmentVisual.MaxObjects || ReadSprite(entity, identity) is not { } pose)
                 continue;
             objects.Add(pose);
+#if COOP_QA
+            if (identity is { Kind: EquipmentKind.Projectile, HostileSource: not null })
+                CapturedHostileProjectile = true;
+#endif
         }
         brief.RemoveAll(entry => !ReferenceEquals(entry.Level, level) ||
             Stopwatch.GetElapsedTime(entry.CapturedAt, now).TotalMilliseconds > 110);

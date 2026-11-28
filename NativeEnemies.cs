@@ -68,6 +68,7 @@ internal sealed class NativeEnemies
     internal int MirroredDeaths { get; private set; }
     internal int GuestStrikes => host ? nextStrike : receivedStrike;
     internal int GuestStrikeReceipt { get; private set; }
+    internal string? GuestStrikeTrace { get; private set; }
     internal EnemyWorld? ObservedWorld => host ? world : lastWorld;
     internal Mob? FindForQa(EnemyKey key) => level is not null && GetRoster(level).ByKey.TryGetValue(key, out var enemy)
         ? enemy.Mob : null;
@@ -95,7 +96,7 @@ internal sealed class NativeEnemies
         };
         Hook_Entity.canReceiveAttack += (original, entity, attack) =>
             !ReferenceEquals(entity, players.Partner) ? original(entity, attack) :
-            host && entity._targetable && attack.source is Mob mob && IsEnemy(mob);
+            host && entity._targetable && players.HostileAttackSource(attack) is not null;
         Hook_Mob.onDie += (original, mob) =>
         {
             if (host && inRun() && IsEnemy(mob) && mob.type?.ToString() is { } kind &&
@@ -105,7 +106,7 @@ internal sealed class NativeEnemies
         };
     }
 
-    private static bool IsEnemy(Mob mob) => mob._level is { } source &&
+    internal static bool IsEnemy(Mob mob) => mob._level is { } source &&
         mob._team is not null && ReferenceEquals(mob._team, source.teamMob);
 
     private bool IsReplica(Mob mob) => !host && inRun() && IsEnemy(mob);
@@ -137,7 +138,7 @@ internal sealed class NativeEnemies
         if (ReferenceEquals(entity, players.Partner))
         {
             if (host && entity._targetable && ReferenceEquals(entity._level, level) &&
-                attack.source is Mob hostile && IsEnemy(hostile) && attack.finalDmg > 0 &&
+                attack.finalDmg > 0 && players.HostileAttackSource(attack) is { } hostile &&
                 Register(hostile._level, hostile, hostile.type?.ToString() ?? "", hostile.cx, hostile.cy,
                     0, hostile.trueLifeTier) is { } enemy)
             {
@@ -270,10 +271,18 @@ internal sealed class NativeEnemies
             receivedStrike = strike.Sequence;
             var dx = (hero.cx + hero.xr) * 24 - strike.X;
             var dy = (hero.cy + hero.yr) * 24 - strike.Y;
-            if (dx * dx + dy * dy > 120 * 120 || !roster.ByKey.TryGetValue(strike.Attacker, out var attacker) ||
-                attacker.Mob.destroyed)
+            if (dx * dx + dy * dy > 120 * 120)
+            {
+#if COOP_QA
+                GuestStrikeTrace = $"{strike.Sequence}: target offset ({dx:F1}, {dy:F1})";
+#endif
                 continue;
-            var attack = AttackUtils.Class.createFromMob.Invoke(attacker.Mob, strike.Power, null);
+            }
+            // A projectile can land after its shooter has been removed from the client world.
+            var source = roster.ByKey.TryGetValue(strike.Attacker, out var attacker) && !attacker.Mob.destroyed
+                ? attacker.Mob : null;
+            var attack = source is null ? new AttackData().init(null, strike.Power) :
+                AttackUtils.Class.createFromMob.Invoke(source, strike.Power, null);
             attack.dmgType = strike.DamageType switch
             {
                 1 => new DamageType.PhysicalAffect(), 2 => new DamageType.Bleed(), 3 => new DamageType.Poison(),
@@ -282,8 +291,16 @@ internal sealed class NativeEnemies
                 9 => new DamageType.ExtraDamage(), 10 => new DamageType.Frost(), 11 => new DamageType.BleedExplosion(),
                 _ => new DamageType.Physical()
             };
-            if (hero.canReceiveAttack(attack))
+            var canReceive = hero.canReceiveAttack(attack);
+#if COOP_QA
+            var before = hero.life;
+#endif
+            if (canReceive)
                 AttackUtils.Class.hit.Invoke(attack, hero);
+#if COOP_QA
+            GuestStrikeTrace = $"{strike.Sequence}: source={source?.GetType().Name ?? "removed"}" +
+                $" canReceive={canReceive} power={strike.Power} life={before}->{hero.life}";
+#endif
         }
     }
 
