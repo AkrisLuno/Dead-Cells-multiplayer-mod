@@ -19,4 +19,5 @@ This repository builds a Dead Cells co-op mod through DCCM. Add gameplay feature
 - Keep multiplayer saves in `save/MSave/`. Use the engine's local serializer context during save and load. Use separate scratch saves for testing.
 - Build and run the relevant regression tests before shipping a change. Verify native gameplay changes with two game instances over LAN, with both instances muted by default. Test Steam separately for Steam changes.
 - Start both isolated QA profiles from the same save baseline when testing seeded layouts. Require both games to exit normally and check that DCCM did not write a new crash report.
+- After each completed work or test run, commit and push its changes to the current branch before starting the next run.
 - Keep generated build outputs, game installations, logs and saves out of Git.
