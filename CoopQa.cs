@@ -18,7 +18,7 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class CoopQa(bool host, string mode, string? stopSignal, Action<string> report)
 {
-    private readonly NormalPlayQa? normal = mode is "normal" or "effects" or "equipment" ? new NormalPlayQa(report, mode) : null;
+    private readonly NormalPlayQa? normal = mode is "normal" or "effects" or "equipment" or "summons" ? new NormalPlayQa(report, mode) : null;
     private static readonly string[] TestWeaponIds = ["RustySword", "TwinDaggers", "BloodSword", "Bow", "WoodShield",
         "BroadSword", "Torch", "IceBow", "Shovel", "Rapier", "BalancedBlade", "AssassinDagger"];
     private PlayerState? beginning;

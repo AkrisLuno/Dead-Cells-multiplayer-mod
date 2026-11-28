@@ -6,7 +6,8 @@ namespace DeadCellsMultiplayerMod;
 internal enum EffectKind
 {
     LandSmoke, LandDirt, LandHeavy, Dive, Dodge, Dash, Slash,
-    ShieldGuard, ShieldParry, ShieldHit, Heal, Explosion, Frost, Smoke, Aura, Teleport, Deflagration, OilBurst
+    ShieldGuard, ShieldParry, ShieldHit, Heal, Explosion, Frost, Smoke, Aura, Teleport, Deflagration, OilBurst,
+    CompanionFlash, CompanionDirt, CompanionHit
 }
 
 internal sealed record PlayerEffect(int Sequence, EffectKind Kind, double X, double Y,
@@ -39,6 +40,9 @@ internal sealed record PlayerEffect(int Sequence, EffectKind Kind, double X, dou
                                  EffectKind.Aura => Scale is > 0 and <= 1024 && Extra is >= 0 and <= 1,
                                  EffectKind.Teleport => Math.Abs(Scale) <= 1024 && Math.Abs(Extra) <= 1024 &&
                                                         Math.Abs(X) <= 1024 && Math.Abs(Y) <= 1024,
+                                 EffectKind.CompanionFlash => true,
+                                 EffectKind.CompanionDirt => Scale is > 0 and <= 160 && Variant is -1 or 0 or 1,
+                                 EffectKind.CompanionHit => Variant is -1 or 1,
                                  _ => false
                              }) && (Kind == EffectKind.Slash || Trail is null);
 }

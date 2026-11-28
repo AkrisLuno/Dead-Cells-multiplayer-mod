@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using dc;
 using dc.en;
 using dc.hxd.res;
 using dc.level;
@@ -15,8 +16,9 @@ namespace DeadCellsMultiplayerMod;
 internal sealed class NativeMovementAudio
 {
     private readonly Queue<(long At, MovementSound Cue)> pending = new(MovementSound.MaxCues);
+    private readonly NativeEquipmentVisuals equipment;
     private MovementSound[]? outgoing;
-    private Hero? capturing;
+    private Entity? capturing;
     private Level? level;
     private int nextSequence;
     private int lastHeard;
@@ -24,6 +26,7 @@ internal sealed class NativeMovementAudio
     internal int Played { get; private set; }
     internal int OutOfRange { get; private set; }
     internal bool PlayedEquipment { get; private set; }
+    internal bool PlayedOwlSummon { get; private set; }
     internal string? LastAsset { get; private set; }
     internal double LastVolume { get; private set; }
     private MovementSound? lastCue;
@@ -31,6 +34,7 @@ internal sealed class NativeMovementAudio
 
     internal NativeMovementAudio(NativeEquipmentVisuals equipment)
     {
+        this.equipment = equipment;
         Hook_Hero.playStepSound += (original, hero) => Capture(hero, () => original(hero));
         Hook_Hero.playClimbSfx += (original, hero) => Capture(hero, () => original(hero));
         Hook_Hero.onLand += (original, hero, velocity) => Capture(hero, () => original(hero, velocity));
@@ -38,8 +42,8 @@ internal sealed class NativeMovementAudio
         Hook_LevelAudio.playEvent += OnSound;
         Hook_OldSkill.playSfx += (original, skill, sound, canPlay, force, volume, pitch, priority) =>
         {
-            if (skill.owner is Hero hero)
-                Capture(hero, () => original(skill, sound, canPlay, force, volume, pitch, priority));
+            if (skill.owner is { } owner && (owner is Hero || equipment.OwnsCompanion(owner)))
+                Capture(owner, () => original(skill, sound, canPlay, force, volume, pitch, priority));
             else
                 original(skill, sound, canPlay, force, volume, pitch, priority);
         };
@@ -58,11 +62,11 @@ internal sealed class NativeMovementAudio
         };
     }
 
-    private void Capture(Hero hero, Action original)
+    internal void Capture(Entity entity, Action original)
     {
         var previous = capturing;
-        if (ReferenceEquals(hero, Game.Class.ME?.hero))
-            capturing = hero;
+        if (ReferenceEquals(entity, Game.Class.ME?.hero) || equipment.OwnsCompanion(entity))
+            capturing = entity;
         try { original(); }
         finally { capturing = previous; }
     }
@@ -131,6 +135,7 @@ internal sealed class NativeMovementAudio
 #if COOP_QA
             Played++;
             PlayedEquipment |= MovementSound.IsEquipmentAsset(cue.Path);
+            PlayedOwlSummon |= cue.Path == "sfx/active/active_owl_pop.wav";
             LastAsset = cue.Path;
             LastVolume = playback.volume;
             lastCue = cue;

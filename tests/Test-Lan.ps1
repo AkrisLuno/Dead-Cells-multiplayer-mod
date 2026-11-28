@@ -12,11 +12,12 @@ param(
     [switch] $VerifyPresentation,
     [switch] $VerifyNormal,
     [switch] $VerifyEffects,
-    [switch] $VerifyEquipment
+    [switch] $VerifyEquipment,
+    [switch] $VerifySummons
 )
 
 $ErrorActionPreference = 'Stop'
-if (@($VerifyExit, $VerifyShop, $VerifyLoot, $VerifyPresentation, $VerifyNormal, $VerifyEffects, $VerifyEquipment).Where({ $_ }).Count -gt 1) {
+if (@($VerifyExit, $VerifyShop, $VerifyLoot, $VerifyPresentation, $VerifyNormal, $VerifyEffects, $VerifyEquipment, $VerifySummons).Where({ $_ }).Count -gt 1) {
     throw 'Choose one gameplay check per run.'
 }
 $root = (Resolve-Path -LiteralPath $InstanceRoot).Path
@@ -71,7 +72,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not acquire two Co-op Anything test slot
 
 try {
     if ($env:DOTNET_ROOT) { $env:Path = "$env:DOTNET_ROOT;$env:Path" }
-    $env:DEAD_CELLS_COOP_QA = if ($VerifyEquipment) {
+    $env:DEAD_CELLS_COOP_QA = if ($VerifySummons) {
+        'summons'
+    } elseif ($VerifyEquipment) {
         'equipment'
     } elseif ($VerifyEffects) {
         'effects'
@@ -155,6 +158,13 @@ try {
             }
             (Wait-ForGameLog $instances[$side] 'COOP_QA EQUIPMENT ShieldParry=True' $deadline).Line
             (Wait-ForGameLog $instances[$side] 'COOP_QA EQUIPMENT Heal=True Explosion=True Smoke=True Sound=True' $deadline).Line
+        }
+    }
+    if ($VerifySummons) {
+        foreach ($side in 'Host', 'Client') {
+            (Wait-ForGameLog $instances[$side] 'COOP_QA SUMMON Owl Arrived=True Audio=True Frost=True Removed=True' $deadline).Line
+            (Wait-ForGameLog $instances[$side] 'COOP_QA SUMMON FlyingSword Arrived=True Trail=True Frost=True Removed=True' $deadline).Line
+            (Wait-ForGameLog $instances[$side] 'COOP_QA SUMMON Mushroom Arrived=True Explosion=True Removed=True' $deadline).Line
         }
     }
     $hostResult.Line

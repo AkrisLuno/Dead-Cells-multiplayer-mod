@@ -50,6 +50,18 @@ public sealed class RemoteMotionTests
     }
 
     [Fact]
+    public void OnlyCompanionsCanSupplyAnEngineTrail()
+    {
+        var trail = new CompanionTrail(0xFFA046, 0.2, 1, 1, 0, 9);
+        var sword = new EquipmentVisual(1, EquipmentKind.Companion, SpriteAtlas.Weapon,
+            "flyingSword", 120, 200, 1, 1, 0, 1, 0, Trail: trail);
+        Assert.True(sword.IsValid);
+        Assert.False((sword with { Kind = EquipmentKind.Projectile }).IsValid);
+        Assert.False((sword with { Trail = trail with { OffsetY = double.NaN } }).IsValid);
+        Assert.False((sword with { Trail = trail with { Thickness = 100 } }).IsValid);
+    }
+
+    [Fact]
     public void MovementSoundFadesSmoothlyInTwoDimensionsAndStopsAtRange()
     {
         var sound = new MovementSound(1, "sfx/hero/step1.wav", 0, 0, 0.8);

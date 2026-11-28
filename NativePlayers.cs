@@ -28,7 +28,7 @@ internal sealed class NativePlayers
     {
         this.log = log;
         audio = new NativeMovementAudio(equipment);
-        effects = new NativePlayerEffects(equipment);
+        effects = new NativePlayerEffects(equipment, audio);
         Hook_KingSkin.fixedUpdate += SkipReplicaSimulation;
         Hook_Level.fillCircularCollisionEntitiesBuffer += ExcludeReplicaFromCollision;
     }
@@ -156,6 +156,7 @@ internal sealed class NativePlayers
     internal int RemoteSounds => audio.Played;
     internal string? LastRemoteSound => audio.LastAsset;
     internal bool PlayedEquipmentSound => audio.PlayedEquipment;
+    internal bool PlayedOwlSummon => audio.PlayedOwlSummon;
     internal NativePlayerEffects Effects => effects;
     internal NativeEquipmentVisuals Equipment => equipment;
     internal (double Near, double Middle, bool FarSilent) ProbeSoundDistance(Hero hero, PlayerState state)

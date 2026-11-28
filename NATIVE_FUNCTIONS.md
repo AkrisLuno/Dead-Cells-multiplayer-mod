@@ -43,6 +43,10 @@
 - `Grenade.fixedUpdate`, `Bullet.fixedUpdate`, `Active.fixedUpdate`, `SmokeBomb.finishCast`
 - `Fx.radiusExplosion`, `Fx.deflagration`, `Fx.oilDeflagration`, `Fx.frostExplosion`, `Fx.smokeBombGrenade`
 - Constructors for `Bullet`, `Grenade`, `Active`, `Pet`, `PetMob`, `Boomerang`, `Decoy` and `Homunculus`
+- `Fx.tailLine`, `Fx.tailLineFree`, `Fx.petSpawn`, `Fx.smallIceExplosion`, `Fx.dirtExplosion`
+- `Owl.init`, `Owl.onBuff`, `Owl.onDebuff`, `Owl.depop`
+- `FlyingSword.init`, `FlyingSword.onBuff`, `FlyingSword.onDebuff`, `FlyingSword.hitCurrentTarget`, `FlyingSword.depop`
+- `PetMob.depop`, `S_ProtectorMushroom.mushExplose`, `Fx.bloodHit`, `Fx.hitLines`
 
 ## Shop reroll
 

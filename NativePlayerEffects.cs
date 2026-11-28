@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Linq;
 using dc;
 using dc.en;
+using dc.en.mob;
+using dc.en.pet;
 using dc.libs.heaps.slib;
 using dc.pr;
 using dc.tool.mainSkills;
@@ -27,9 +29,10 @@ internal sealed class NativePlayerEffects
     internal bool[] Captured { get; } = new bool[Enum.GetValues<EffectKind>().Length];
     internal bool[] Played { get; } = new bool[Enum.GetValues<EffectKind>().Length];
     internal string? LastTrailGroup { get; private set; }
+    internal int CompanionFrostEffects { get; private set; }
 #endif
 
-    internal NativePlayerEffects(NativeEquipmentVisuals equipment)
+    internal NativePlayerEffects(NativeEquipmentVisuals equipment, NativeMovementAudio audio)
     {
         Hook_Hero.onLand += (original, hero, speed) => Capture(hero, () => original(hero, speed));
         Hook_Dodge.onStart += (original, skill) => Capture(skill.hero, () => original(skill));
@@ -58,6 +61,7 @@ internal sealed class NativePlayerEffects
         };
         dc.pow.Hook_SmokeBomb.finishCast += (original, skill) =>
             CaptureEquipment(skill.owner as Hero, () => original(skill));
+        InstallCompanionHooks(equipment, audio);
 
         Hook_Fx.landSmoke += (original, fx, x, y, count) =>
         {
@@ -181,6 +185,57 @@ internal sealed class NativePlayerEffects
             if (owner.spr is { } sprite)
                 Record(owner as Hero, fx, new(0, EffectKind.Teleport, fromX - sprite.x, fromY - sprite.y,
                     Color: color, Scale: toX - sprite.x, Extra: toY - sprite.y));
+        };
+    }
+
+    private void InstallCompanionHooks(NativeEquipmentVisuals equipment, NativeMovementAudio audio)
+    {
+        void CaptureCompanion(Entity companion, Action original)
+        {
+            if (equipment.OwnsCompanion(companion))
+                CaptureEquipment(Game.Class.ME?.hero, () => audio.Capture(companion, original));
+            else
+                original();
+        }
+
+        Hook_Owl.init += (original, owl) => CaptureCompanion(owl, () => original(owl));
+        Hook_Owl.onBuff += (original, owl, item) => CaptureCompanion(owl, () => original(owl, item));
+        Hook_Owl.onDebuff += (original, owl, item) => CaptureCompanion(owl, () => original(owl, item));
+        Hook_Owl.depop += (original, owl) => CaptureCompanion(owl, () => original(owl));
+        Hook_FlyingSword.init += (original, sword) => CaptureCompanion(sword, () => original(sword));
+        Hook_FlyingSword.onBuff += (original, sword, item) => CaptureCompanion(sword, () => original(sword, item));
+        Hook_FlyingSword.onDebuff += (original, sword, item) => CaptureCompanion(sword, () => original(sword, item));
+        Hook_FlyingSword.depop += (original, sword) => CaptureCompanion(sword, () => original(sword));
+        Hook_FlyingSword.hitCurrentTarget += (original, sword, damage, hits) =>
+            CaptureCompanion(sword, () => original(sword, damage, hits));
+        Hook_PetMob.depop += (original, pet) => CaptureCompanion(pet, () => original(pet));
+        Hook_S_ProtectorMushroom.mushExplose += (original, pet, radius) =>
+            CaptureCompanion(pet, () => original(pet, radius));
+
+        Hook_Fx.petSpawn += (original, fx, pet, color) =>
+        {
+            original(fx, pet, color);
+            if (equipment.OwnsCompanion(pet))
+                Record(Game.Class.ME?.hero, fx, new(0, EffectKind.CompanionFlash, (pet.cx + pet.xr) * 24,
+                    (pet.cy + pet.yr) * 24 - 20, Color: color));
+        };
+        Hook_Fx.smallIceExplosion += (original, fx, x, y, color) =>
+        {
+            original(fx, x, y, color);
+            Record(equipmentOwner, fx, new(0, EffectKind.CompanionFlash, x, y, Color: color));
+        };
+        Hook_Fx.dirtExplosion += (original, fx, x, y, radius, core, outer, top) =>
+        {
+            var topLayer = top.IsNull ? -1 : top.value ? 1 : 0;
+            original(fx, x, y, radius, core, outer, top);
+            Record(equipmentOwner, fx, new(0, EffectKind.CompanionDirt, x, y, topLayer, core, outer, radius));
+        };
+        Hook_Fx.bloodHit += (original, fx, attack, target) =>
+        {
+            original(fx, attack, target);
+            if (equipmentOwner is { } hero && target?.spr is { } sprite)
+                Record(hero, fx, new(0, EffectKind.CompanionHit, sprite.x, sprite.y - 12,
+                    attack?.source?.dir < 0 ? -1 : 1, 0xFFD784));
         };
     }
 
@@ -341,6 +396,17 @@ internal sealed class NativePlayerEffects
                 case EffectKind.Frost:
                     fx.frostExplosion(cue.X, cue.Y, cue.Variant, cue.Scale, cue.Color ?? 0xFFFFFF);
                     break;
+                case EffectKind.CompanionFlash:
+                    fx.smallIceExplosion(cue.X, cue.Y, cue.Color ?? 0xFFFFFF);
+                    break;
+                case EffectKind.CompanionDirt:
+                    var onTop = cue.Variant == 1;
+                    fx.dirtExplosion(cue.X, cue.Y, cue.Scale, cue.Color ?? 0xFFFFFF, cue.OuterColor ?? 0xFFFFFF,
+                        cue.Variant == -1 ? Ref<bool>.Null : Ref<bool>.From(ref onTop));
+                    break;
+                case EffectKind.CompanionHit:
+                    fx.hitLines(cue.X, cue.Y, cue.Variant, cue.Color ?? 0xFFD784, null, Ref<int>.Null, Ref<int>.Null);
+                    break;
                 case EffectKind.Smoke:
                     fx.smokeBombGrenade(cue.X, cue.Y, cue.Scale, cue.Color ?? 0xFFFFFF);
                     break;
@@ -356,6 +422,8 @@ internal sealed class NativePlayerEffects
             }
 #if COOP_QA
             Played[(int)cue.Kind] = true;
+            if (cue.Kind == EffectKind.Frost)
+                CompanionFrostEffects++;
 #endif
         }
     }

@@ -16,8 +16,15 @@ namespace DeadCellsMultiplayerMod;
 
 internal sealed class NativeEquipmentVisuals
 {
-    private sealed record Owned(int Id, EquipmentKind Kind, long SpawnedAt);
-    private sealed record Replica(HSprite Sprite, EquipmentVisual Pose);
+    private sealed class Owned(int id, EquipmentKind kind, long spawnedAt)
+    {
+        internal int Id { get; } = id;
+        internal EquipmentKind Kind { get; } = kind;
+        internal long SpawnedAt { get; } = spawnedAt;
+        internal CompanionTrail? Trail { get; set; }
+        internal long TrailAt { get; set; }
+    }
+    private sealed record Replica(HSprite Sprite, EquipmentVisual Pose, bool Appeared);
     private readonly Dictionary<Entity, Owned> owned = new();
     private readonly Dictionary<int, Replica> replicas = new();
     private readonly List<(Level Level, EquipmentVisual Visual, long CapturedAt)> brief = [];
@@ -33,6 +40,9 @@ internal sealed class NativeEquipmentVisuals
 #if COOP_QA
     internal HashSet<EquipmentKind> Captured { get; } = [];
     internal HashSet<EquipmentKind> Rendered { get; } = [];
+    internal int CompanionArrivals { get; private set; }
+    internal int CompanionRemovals { get; private set; }
+    internal int CompanionTrails { get; private set; }
 #endif
 
     internal NativeEquipmentVisuals()
@@ -40,7 +50,7 @@ internal sealed class NativeEquipmentVisuals
         Hook__Bullet.__constructor__ += (original, bullet, owner, attack, speed, distance, group) =>
         {
             original(bullet, owner, attack, speed, distance, group);
-            Track(bullet, attack?.source ?? owner, EquipmentKind.Projectile);
+            Track(bullet, Owns(owner) ? owner : attack?.source ?? owner, EquipmentKind.Projectile);
         };
         Hook__Grenade.__constructor__ += (original, grenade, owner, speed) =>
         {
@@ -77,6 +87,23 @@ internal sealed class NativeEquipmentVisuals
             original(head, level, x, y, visible, auto, skill);
             Track(head, skill?.hero, EquipmentKind.Companion);
         };
+        Hook_Fx.tailLine += (original, fx, entity, color, alpha, thickness, duration, offX, offY) =>
+        {
+            if (owned.TryGetValue(entity, out var companion) && companion.Kind == EquipmentKind.Companion)
+            {
+                var x = offX.IsNull ? 0 : offX.value;
+                var y = offY.IsNull ? 0 : offY.value;
+                var life = duration ?? 1;
+                if (companion.Trail is not { } previous || previous.Color != color || previous.Alpha != alpha ||
+                    previous.Thickness != thickness || previous.Duration != life || previous.OffsetX != x || previous.OffsetY != y)
+                {
+                    var trail = new CompanionTrail(color, alpha, thickness, life, x, y);
+                    companion.Trail = trail.IsValid ? trail : null;
+                }
+                companion.TrailAt = Stopwatch.GetTimestamp();
+            }
+            original(fx, entity, color, alpha, thickness, duration, offX, offY);
+        };
         Hook_Entity.destroy += (original, entity) =>
         {
             if (owned.TryGetValue(entity, out var identity) && identity.Kind == EquipmentKind.Projectile &&
@@ -100,6 +127,9 @@ internal sealed class NativeEquipmentVisuals
     }
 
     internal bool Owns(Entity? entity) => entity is not null && owned.ContainsKey(entity);
+
+    internal bool OwnsCompanion(Entity? entity) => entity is not null && owned.TryGetValue(entity, out var identity) &&
+        identity.Kind == EquipmentKind.Companion;
 
     internal EquipmentVisual[]? Capture(Level level)
     {
@@ -139,12 +169,14 @@ internal sealed class NativeEquipmentVisuals
 
     private EquipmentVisual? ReadSprite(Entity entity, Owned identity)
     {
-        if (!entity.visible || entity.spr is not
-            { destroyed: false, visible: true, lib: { } library, groupName: { } group } sprite ||
+        if (entity.spr is not { destroyed: false, lib: { } library, groupName: { } group } sprite ||
+            identity.Kind != EquipmentKind.Companion && (!entity.visible || !sprite.visible) ||
             IdentifyAtlas(library) is not { } atlas)
             return null;
+        var trail = identity.Trail is { } style && Stopwatch.GetElapsedTime(identity.TrailAt).TotalMilliseconds < 95 ? style : null;
         var pose = new EquipmentVisual(identity.Id, identity.Kind, atlas.Atlas, group.ToString(),
-            sprite.x, sprite.y, sprite.scaleX, sprite.scaleY, sprite.rotation, sprite.alpha, sprite.frame, atlas.Key);
+            sprite.x, sprite.y, sprite.scaleX, sprite.scaleY, sprite.rotation,
+            entity.visible && sprite.visible ? sprite.alpha : 0, sprite.frame, atlas.Key, trail);
         return pose.IsValid ? pose : null;
     }
 
@@ -162,8 +194,13 @@ internal sealed class NativeEquipmentVisuals
             {
                 if (objects is not null && Array.Exists(objects, pose => pose.Id == id))
                     continue;
-                replica.Sprite.remove();
+                if (!replica.Sprite.destroyed)
+                    replica.Sprite.remove();
                 replicas.Remove(id);
+#if COOP_QA
+                if (replica.Pose.Kind == EquipmentKind.Companion)
+                    CompanionRemovals++;
+#endif
             }
         }
         if (objects is null)
@@ -181,25 +218,42 @@ internal sealed class NativeEquipmentVisuals
         if (!replicas.TryGetValue(pose.Id, out var replica) || replica.Sprite.destroyed ||
             replica.Pose.Group != pose.Group || replica.Pose.Atlas != pose.Atlas || replica.Pose.AtlasKey != pose.AtlasKey)
         {
-            if (replicas.Remove(pose.Id, out var previous) && !previous.Sprite.destroyed)
+            var x = pose.X;
+            var y = pose.Y;
+            if (replica is { Sprite.destroyed: false } previous)
+            {
+                x = previous.Sprite.x;
+                y = previous.Sprite.y;
                 previous.Sprite.remove();
+            }
+            replicas.Remove(pose.Id);
             var library = ResolveAtlas(pose.Atlas, pose.AtlasKey);
             var name = pose.Group.AsHaxeString();
             if (library?.groups?.exists(name) != true)
                 return;
             var sprite = new HSprite(library, name, Ref<int>.Null, null);
             level.scroller.over(sprite);
-            replica = new Replica(sprite, pose);
+            replica = new Replica(sprite, pose, replica?.Appeared == true);
             replicas[pose.Id] = replica;
-            sprite.x = pose.X;
-            sprite.y = pose.Y;
+            sprite.x = x;
+            sprite.y = y;
         }
-        else if (replica.Pose != pose)
+        if (!replica.Appeared && pose.Kind == EquipmentKind.Companion && pose.Alpha > 0)
+        {
+            level.fx.smallIceExplosion(pose.X, pose.Y, pose.Trail?.Color ?? 0xB5D7FF);
+            replica = replica with { Appeared = true };
+#if COOP_QA
+            CompanionArrivals++;
+#endif
+        }
+        if (replica.Pose != pose)
         {
             replica = replica with { Pose = pose };
-            replicas[pose.Id] = replica;
         }
+        replicas[pose.Id] = replica;
         var visual = replica.Sprite;
+        var previousX = visual.x;
+        var previousY = visual.y;
         var dx = pose.X - visual.x;
         var dy = pose.Y - visual.y;
         var movementBlend = dx * dx + dy * dy > 192 * 192 ? 1 : blend;
@@ -211,10 +265,30 @@ internal sealed class NativeEquipmentVisuals
         visual.alpha = pose.Alpha;
         if (visual.frame != pose.Frame && pose.Frame < visual.totalFrames())
             visual.setFrame(pose.Frame);
+        if (pose.Alpha > 0 && pose.Trail is { } trail && movementBlend < 1 &&
+            Math.Abs(visual.x - previousX) + Math.Abs(visual.y - previousY) >= 0.75)
+        {
+            level.fx.tailLineFree(previousX + trail.OffsetX, previousY + trail.OffsetY,
+                visual.x + trail.OffsetX, visual.y + trail.OffsetY,
+                trail.Color, trail.Alpha, trail.Thickness, trail.Duration);
+#if COOP_QA
+            CompanionTrails++;
+#endif
+        }
 #if COOP_QA
         Rendered.Add(pose.Kind);
 #endif
     }
+
+#if COOP_QA
+    internal T? FindCompanion<T>() where T : Entity
+    {
+        foreach (var (entity, identity) in owned)
+            if (identity.Kind == EquipmentKind.Companion && entity is T { destroyed: false } companion)
+                return companion;
+        return null;
+    }
+#endif
 
     internal void Clear()
     {

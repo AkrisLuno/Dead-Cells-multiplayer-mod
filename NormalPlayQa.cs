@@ -3,6 +3,8 @@ using System;
 using System.Diagnostics;
 using Math = System.Math;
 using dc.en;
+using dc.en.mob;
+using dc.en.pet;
 using dc.hxd;
 using dc.pr;
 using dc.tool;
@@ -39,6 +41,7 @@ internal sealed class NormalPlayQa(Action<string> report, string mode)
     private bool actionSent;
     private bool smokeTested;
     private int projectileShots;
+    private int previousCompanionTrails;
     private static readonly (string Item, EquipmentKind Kind)[] EquipmentFixtures =
         [("StartBow", EquipmentKind.Projectile), ("ExplosiveGrenade", EquipmentKind.Grenade),
          ("HorizontalTurret", EquipmentKind.Deployable), ("Owl", EquipmentKind.Companion)];
@@ -63,6 +66,8 @@ internal sealed class NormalPlayQa(Action<string> report, string mode)
         if (stage < 0)
             return false;
         var age = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+        if (mode == "summons")
+            return VerifySummons(hero, remote, players, age);
         peerJumped |= remote.Animation == "jump";
         var replicaGroup = players.ReplicaAnimation;
         peerJumpRendered |= replicaGroup?.Contains("jump", StringComparison.OrdinalIgnoreCase) == true;
@@ -266,6 +271,106 @@ internal sealed class NormalPlayQa(Action<string> report, string mode)
                     Fail($"{item} sprite missing. Sent={string.Join(',', players.Equipment.Captured)} Received={string.Join(',', players.Equipment.Rendered)}");
                 break;
         }
+        return false;
+    }
+
+    private bool VerifySummons(Hero hero, PlayerState remote, NativePlayers players, double age)
+    {
+        var equipment = players.Equipment;
+        var effects = players.Effects;
+        switch (stage)
+        {
+            case 0:
+                if (!players.ReplicaAt(remote) || hero.controlsLocked(Ref<bool>.Null))
+                    return false;
+                if (Equip(hero, "Owl", active: true))
+                    Advance();
+                break;
+            case 1:
+                if (age >= 500)
+                {
+                    Press(EquippedKey(hero, "Owl", active: true), 420);
+                    Advance();
+                }
+                break;
+            case 2:
+                if (age >= 1200 && players.PlayedOwlSummon && equipment.CompanionArrivals >= 1 &&
+                    equipment.FindCompanion<Owl>() is { } owl)
+                {
+                    owl.depop();
+                    Advance();
+                }
+                break;
+            case 3:
+                if (equipment.CompanionRemovals >= 1 && effects.CompanionFrostEffects >= 1)
+                {
+                    report("COOP_QA SUMMON Owl Arrived=True Audio=True Frost=True Removed=True");
+                    if (Equip(hero, "FlyingSword", active: true))
+                        Advance();
+                }
+                break;
+            case 4:
+                if (age >= 500)
+                {
+                    previousCompanionTrails = equipment.CompanionTrails;
+                    Press(EquippedKey(hero, "FlyingSword", active: true), 420);
+                    Advance();
+                }
+                break;
+            case 5:
+                if (equipment.CompanionArrivals >= 2 && equipment.FindCompanion<FlyingSword>() is not null)
+                {
+                    Press(Right, 720);
+                    Advance();
+                }
+                break;
+            case 6:
+                if (age >= 950 && equipment.CompanionTrails > previousCompanionTrails &&
+                    equipment.FindCompanion<FlyingSword>() is { } sword)
+                {
+                    sword.depop();
+                    Advance();
+                }
+                else if (age >= 1600 && !actionSent)
+                {
+                    actionSent = true;
+                    Press(Left, 820);
+                }
+                break;
+            case 7:
+                if (equipment.CompanionRemovals >= 2 && effects.CompanionFrostEffects >= 2)
+                {
+                    report("COOP_QA SUMMON FlyingSword Arrived=True Trail=True Frost=True Removed=True");
+                    if (Equip(hero, "SpawnFriendlyHardy", active: true))
+                        Advance();
+                }
+                break;
+            case 8:
+                if (age >= 500)
+                {
+                    Press(EquippedKey(hero, "SpawnFriendlyHardy", active: true), 420);
+                    Advance();
+                }
+                break;
+            case 9:
+                if (age >= 1000 && equipment.CompanionArrivals >= 3 &&
+                    equipment.FindCompanion<S_ProtectorMushroom>() is { } mushroom)
+                {
+                    mushroom.giveExplodeOrder();
+                    Advance();
+                }
+                break;
+            case 10:
+                if (equipment.CompanionRemovals >= 3 && effects.Played[(int)EffectKind.Deflagration])
+                {
+                    report("COOP_QA SUMMON Mushroom Arrived=True Explosion=True Removed=True");
+                    return true;
+                }
+                break;
+        }
+        if (stage > 0 && age > 8000 && Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds > 8000)
+            Fail($"summons step {stage}, arrivals={equipment.CompanionArrivals}, removals={equipment.CompanionRemovals}," +
+                $" trails={equipment.CompanionTrails}, frost={effects.CompanionFrostEffects}, owl audio={players.PlayedOwlSummon}");
         return false;
     }
 
